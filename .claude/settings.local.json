@@ -1,0 +1,5 @@
+{
+  "ANTHROPIC_BASE_URL": "http://localhost:20128",
+  "ANTHROPIC_AUTH_TOKEN": "sk-e0677724e0d3bd32-ad246a-d06175fa",
+  "ANTHROPIC_MODEL": "auto/best-coding"
+}
