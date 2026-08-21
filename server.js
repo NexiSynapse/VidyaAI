@@ -412,6 +412,53 @@ app.post('/api/flashcards/review', async (req, res) => {
   }
 });
 
+// ─── Settings ────────────────────────────────────────────────────────────────
+
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+
+async function loadSettings() {
+  try {
+    const data = await fs.readFile(SETTINGS_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch {
+    return {};
+  }
+}
+
+async function saveSettings(settings) {
+  await fs.writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+}
+
+// GET /api/settings: Return current settings
+app.get('/api/settings', async (req, res) => {
+  try {
+    const fileSettings = await loadSettings();
+    res.json({
+      apiKey: fileSettings.apiKey || '',
+      model: fileSettings.model || process.env.AI_MODEL || 'gpt-4o-mini',
+      embeddingsModel: fileSettings.embeddingsModel || process.env.EMBEDDINGS_MODEL || 'text-embedding-3-small',
+      chunkSize: fileSettings.chunkSize || 700,
+      chunkOverlap: fileSettings.chunkOverlap || 15,
+      supabaseUrl: process.env.SUPABASE_URL || '',
+      supabaseConnected: !!(process.env.SUPABASE_URL && process.env.SUPABASE_KEY),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/settings: Update settings
+app.post('/api/settings', async (req, res) => {
+  try {
+    const current = await loadSettings();
+    const updated = { ...current, ...req.body };
+    await saveSettings(updated);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`VidyaAI server running on http://localhost:${PORT}`);
 });

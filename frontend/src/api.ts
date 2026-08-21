@@ -191,3 +191,26 @@ export async function reviewFlashcard(cardId: string, quality: number): Promise<
     body: JSON.stringify({ cardId, userId: DEMO_USER_ID, quality }),
   });
 }
+
+// Settings
+export interface ApiSettings {
+  apiKey: string;
+  model: string;
+  embeddingsModel: string;
+  chunkSize: number;
+  chunkOverlap: number;
+  supabaseUrl: string;
+  supabaseConnected: boolean;
+}
+
+export async function fetchSettings(): Promise<ApiSettings> {
+  return request<ApiSettings>('/settings');
+}
+
+export async function updateSettings(settings: Partial<ApiSettings>): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>('/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+}

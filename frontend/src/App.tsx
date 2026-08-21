@@ -11,12 +11,15 @@ import {
   fetchProgress,
   fetchAttempts,
   fetchDueFlashcards,
+  fetchSettings,
+  updateSettings,
   type ApiDocument,
   type ApiTopic,
   type ApiQuiz,
   type ApiProgress,
   type ApiAttemptRow,
   type ApiFlashcard,
+  type ApiSettings,
 } from "./api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1164,27 +1167,126 @@ function ProgressView() {
 }
 
 function SettingsView() {
+  const [settings, setSettings] = useState<ApiSettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState("");
+  const [embeddingsModel, setEmbeddingsModel] = useState("");
+  const [chunkSize, setChunkSize] = useState(700);
+  const [chunkOverlap, setChunkOverlap] = useState(15);
+
+  useEffect(() => {
+    fetchSettings()
+      .then(s => {
+        setSettings(s);
+        setApiKey(s.apiKey);
+        setModel(s.model);
+        setEmbeddingsModel(s.embeddingsModel);
+        setChunkSize(s.chunkSize);
+        setChunkOverlap(s.chunkOverlap);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleSave() {
+    setSaving(true);
+    setSaved(false);
+    try {
+      await updateSettings({ apiKey, model, embeddingsModel, chunkSize, chunkOverlap });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return <div className="p-6 text-sm font-mono text-[#52525b]">Loading settings...</div>;
+  }
+
   return (
     <div className="p-6 w-full space-y-8">
-      <div>
-        <h2 className="font-mono font-bold text-xl text-[#f4f4f5] mb-1">Settings</h2>
-        <p className="text-sm text-[#71717a]">Configure your VidyaAI environment.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-mono font-bold text-xl text-[#f4f4f5] mb-1">Settings</h2>
+          <p className="text-sm text-[#71717a]">Configure your VidyaAI environment.</p>
+        </div>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-60 text-white text-xs font-mono font-semibold transition-colors duration-150"
+        >
+          {saving ? "Saving..." : saved ? "Saved!" : "Save Settings"}
+        </button>
       </div>
+
+      {/* API Key */}
+      <div className="py-3 border-b border-[#27272a]">
+        <label className="block font-mono text-sm text-[#d4d4d8] mb-1">API Key</label>
+        <p className="font-mono text-xs text-[#52525b] mb-2">OpenAI API key for embeddings and chat</p>
+        <input
+          type="password"
+          value={apiKey}
+          onChange={e => setApiKey(e.target.value)}
+          placeholder="sk-..."
+          className="w-full max-w-md bg-[#1c1c1f] border border-[#3f3f46] rounded-lg px-3 py-2 text-sm font-mono text-[#f4f4f5] placeholder:text-[#52525b] focus:outline-none focus:border-indigo-500 transition-colors duration-150"
+        />
+        <p className="text-[10px] font-mono text-[#3f3f46] mt-1">Stored locally in settings.json — never committed</p>
+      </div>
+
+      {/* Model settings */}
       {[
-        { label: "LLM Provider", value: "Groq — openai/gpt-oss-120b", note: "Chat endpoint" },
-        { label: "Embeddings", value: "OpenAI — text-embedding-3-small", note: "Vector search" },
-        { label: "Fallback Model", value: "Claude Haiku 4.5", note: "Quiz generation" },
-        { label: "Vector Store", value: "Supabase pgvector", note: "Connected" },
-        { label: "Chunk Size", value: "~700 tokens / 15% overlap", note: "Default" },
+        { label: "AI Model", value: model, onChange: setModel, note: "Chat endpoint", placeholder: "gpt-4o-mini" },
+        { label: "Embeddings Model", value: embeddingsModel, onChange: setEmbeddingsModel, note: "Vector search", placeholder: "text-embedding-3-small" },
       ].map(row => (
-        <div key={row.label} className="flex items-center justify-between gap-4 py-3 border-b border-[#27272a]">
-          <div className="min-w-0">
-            <p className="font-mono text-sm text-[#d4d4d8]">{row.label}</p>
-            <p className="font-mono text-xs text-[#52525b] mt-0.5">{row.note}</p>
-          </div>
-          <span className="px-3 py-1.5 rounded-lg bg-[#3f3f46] border border-[#52525b]/40 text-xs font-mono text-[#a1a1aa] shrink-0 text-right">{row.value}</span>
+        <div key={row.label} className="py-3 border-b border-[#27272a]">
+          <label className="block font-mono text-sm text-[#d4d4d8] mb-1">{row.label}</label>
+          <p className="font-mono text-xs text-[#52525b] mb-2">{row.note}</p>
+          <input
+            type="text"
+            value={row.value}
+            onChange={e => row.onChange(e.target.value)}
+            placeholder={row.placeholder}
+            className="w-full max-w-md bg-[#1c1c1f] border border-[#3f3f46] rounded-lg px-3 py-2 text-sm font-mono text-[#f4f4f5] placeholder:text-[#52525b] focus:outline-none focus:border-indigo-500 transition-colors duration-150"
+          />
         </div>
       ))}
+
+      {/* Chunk settings */}
+      {[
+        { label: "Chunk Size", value: chunkSize, onChange: setChunkSize, note: "Tokens per chunk", min: 200, max: 2000 },
+        { label: "Chunk Overlap", value: chunkOverlap, onChange: setChunkOverlap, note: "Overlap percentage", min: 0, max: 50 },
+      ].map(row => (
+        <div key={row.label} className="py-3 border-b border-[#27272a]">
+          <label className="block font-mono text-sm text-[#d4d4d8] mb-1">{row.label}</label>
+          <p className="font-mono text-xs text-[#52525b] mb-2">{row.note}</p>
+          <div className="flex items-center gap-3 max-w-md">
+            <input
+              type="range"
+              min={row.min}
+              max={row.max}
+              value={row.value}
+              onChange={e => row.onChange(+e.target.value)}
+              className="flex-1 accent-indigo-500 cursor-pointer"
+            />
+            <span className="font-mono text-sm text-[#a1a1aa] w-12 text-right">{row.value}{row.label.includes("Over") ? "%" : ""}</span>
+          </div>
+        </div>
+      ))}
+
+      {/* Connection status */}
+      <div className="py-3">
+        <label className="block font-mono text-sm text-[#d4d4d8] mb-1">Vector Store</label>
+        <p className="font-mono text-xs text-[#52525b] mb-2">Supabase pgvector connection</p>
+        <div className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full ${settings?.supabaseConnected ? "bg-green-400" : "bg-red-400"}`} />
+          <span className="font-mono text-xs text-[#a1a1aa]">{settings?.supabaseConnected ? "Connected" : "Not connected"}</span>
+        </div>
+      </div>
     </div>
   );
 }
