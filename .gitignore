@@ -3,6 +3,10 @@ node_modules/
 vidya-ai/node_modules/
 frontend/node_modules/
 
+# Old prototypes (all work integrated into root)
+vidya-ai/
+VidyaAI/
+
 # Environment variables (PRIVATE - do not commit)
 .env
 .env.local
