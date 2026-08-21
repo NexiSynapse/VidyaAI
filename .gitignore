@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+vidya-ai/node_modules/
+frontend/node_modules/
+
+# Environment variables (PRIVATE - do not commit)
+.env
+.env.local
+.env.*.local
+
+# Build output
+build/
+dist/
+vidya-ai/build/
+
+# Uploads
+uploads/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
