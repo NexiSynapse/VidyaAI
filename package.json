@@ -1,0 +1,32 @@
+{
+  "name": "vidyaai",
+  "version": "1.0.0",
+  "description": "An AI-powered Computer Science study teacher: upload your course notes/PDFs and get RAG-grounded answers, auto-generated quizzes, and tracked mastery.",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NexiSynapse/VidyaAI.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/NexiSynapse/VidyaAI/issues"
+  },
+  "homepage": "https://github.com/NexiSynapse/VidyaAI#readme",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
+    "axios": "^1.19.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "multer": "^2.2.0",
+    "openai": "^7.5.0",
+    "pdf-parse": "^2.4.5"
+  }
+}

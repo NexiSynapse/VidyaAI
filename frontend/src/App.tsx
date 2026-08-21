@@ -1,126 +1,55 @@
 import { useState, useRef, useEffect } from "react";
+import {
+  fetchDocuments,
+  uploadDocument,
+  fetchTopics,
+  searchChunks,
+  fetchQuizzes,
+  fetchQuiz,
+  submitQuiz,
+  fetchProgress,
+  fetchAttempts,
+  fetchDueFlashcards,
+  type ApiDocument,
+  type ApiTopic,
+  type ApiQuiz,
+  type ApiProgress,
+  type ApiAttemptRow,
+  type ApiFlashcard,
+} from "./api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type View = "dashboard" | "documents" | "chat" | "quiz" | "progress" | "settings";
-type QuizPhase = "generate" | "taking" | "results";
-type DocStatus = "ready" | "processing" | "error";
+type QuizPhase = "list" | "taking" | "results";
 
-interface Document {
-  id: string;
-  title: string;
-  topic: string;
-  status: DocStatus;
-  pages: number;
-  date: string;
-  size: string;
-}
-
-interface Message {
+interface ChatMessage {
   id: string;
   role: "user" | "ai";
   content: string;
-  citations?: { snippet: string; page: number }[];
+  citations?: { snippet: string; page?: number | null }[];
   timestamp: string;
 }
 
-interface QuizQuestion {
-  id: string;
-  question: string;
-  options: string[];
-  correct: number;
-  explanation: string;
+interface SelectedAnswers {
+  [questionIndex: number]: string;
 }
 
-interface TopicProgress {
-  topic: string;
-  mastery: number;
-  attempts: number;
-  lastAttempt: string;
-  trend: "up" | "down" | "flat";
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function now() {
+  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-// ─── Mock Data ────────────────────────────────────────────────────────────────
+function statusForDoc(d: ApiDocument): "ready" | "processing" | "error" {
+  if (d.status === "processed") return "ready";
+  if (d.status === "error") return "error";
+  return "processing";
+}
 
-const MOCK_DOCS: Document[] = [
-  { id: "d1", title: "lecture_week5_binary_trees.pdf", topic: "Data Structures", status: "ready", pages: 24, date: "Aug 18, 2026", size: "1.2 MB" },
-  { id: "d2", title: "dynamic_programming_notes.pdf", topic: "Algorithms", status: "ready", pages: 38, date: "Aug 17, 2026", size: "2.8 MB" },
-  { id: "d3", title: "os_memory_management.pdf", topic: "Operating Systems", status: "processing", pages: 0, date: "Aug 20, 2026", size: "4.1 MB" },
-  { id: "d4", title: "graph_algorithms_midterm.pdf", topic: "Algorithms", status: "ready", pages: 15, date: "Aug 15, 2026", size: "0.9 MB" },
-  { id: "d5", title: "networking_fundamentals.pdf", topic: "Networks", status: "error", pages: 0, date: "Aug 14, 2026", size: "3.3 MB" },
-];
-
-const MOCK_MESSAGES: Message[] = [
-  {
-    id: "m1", role: "user", content: "What is the time complexity of inserting a node into a balanced BST?",
-    timestamp: "10:42 AM",
-  },
-  {
-    id: "m2", role: "ai",
-    content: "Inserting a node into a balanced Binary Search Tree (BST) — such as an AVL tree or Red-Black tree — takes **O(log n)** time in both average and worst cases.\n\nThis is because the tree maintains a height of at most O(log n) through rotations after each insertion. You traverse from root to leaf (log n levels) to find the insertion point, then perform at most O(log n) rotations to rebalance.",
-    citations: [{ snippet: "A balanced BST maintains O(log n) height by performing rotations after insertions...", page: 7 }],
-    timestamp: "10:42 AM",
-  },
-  {
-    id: "m3", role: "user", content: "How does an AVL tree differ from a Red-Black tree?",
-    timestamp: "10:44 AM",
-  },
-  {
-    id: "m4", role: "ai",
-    content: "Both are self-balancing BSTs, but they differ in their balancing strategy:\n\n**AVL Trees** maintain a stricter balance — every node's subtrees differ in height by at most 1. This makes lookups slightly faster but requires more rotations on insertions/deletions.\n\n**Red-Black Trees** are more loosely balanced — the longest path is at most twice the shortest. They require fewer rotations on writes, which is why most standard library implementations (Java's `TreeMap`, C++'s `std::map`) use Red-Black trees.",
-    citations: [
-      { snippet: "AVL trees enforce |height(left) - height(right)| ≤ 1 at every node...", page: 11 },
-      { snippet: "Red-Black trees guarantee no path is more than twice as long as any other...", page: 14 },
-    ],
-    timestamp: "10:44 AM",
-  },
-];
-
-const MOCK_QUIZ: QuizQuestion[] = [
-  {
-    id: "q1",
-    question: "Which traversal of a BST produces nodes in sorted (ascending) order?",
-    options: ["Pre-order", "In-order", "Post-order", "Level-order"],
-    correct: 1,
-    explanation: "In-order traversal visits left subtree → root → right subtree. Since all values in a BST's left subtree are smaller and right subtree are larger, in-order traversal yields nodes in ascending sorted order.",
-  },
-  {
-    id: "q2",
-    question: "What is the worst-case height of a Red-Black tree with n nodes?",
-    options: ["O(n)", "O(log n)", "O(2 log n)", "O(n log n)"],
-    correct: 2,
-    explanation: "A Red-Black tree guarantees that no path from root to leaf is more than twice the length of any other path. The minimum path is log n (all black nodes), so the maximum height is 2 log n — still O(log n) asymptotically.",
-  },
-  {
-    id: "q3",
-    question: "When deleting a node with two children from a BST, which replacement strategy is most common?",
-    options: ["Replace with the root node", "Replace with in-order successor or predecessor", "Replace with the leftmost leaf", "Restructure the entire subtree"],
-    correct: 1,
-    explanation: "The standard approach replaces the deleted node's value with its in-order successor (smallest node in right subtree) or predecessor (largest in left subtree), then deletes that successor/predecessor node instead — which has at most one child.",
-  },
-  {
-    id: "q4",
-    question: "Which operation is NOT O(log n) in a balanced BST?",
-    options: ["Search", "Insert", "Delete", "Finding all nodes in a range [a, b]"],
-    correct: 3,
-    explanation: "Range queries require visiting all k nodes in the range, making them O(log n + k) — not pure O(log n). The log n term covers finding the starting point; k covers outputting every matching node.",
-  },
-];
-
-const MOCK_PROGRESS: TopicProgress[] = [
-  { topic: "Data Structures", mastery: 82, attempts: 7, lastAttempt: "Aug 19", trend: "up" },
-  { topic: "Algorithms", mastery: 64, attempts: 5, lastAttempt: "Aug 18", trend: "up" },
-  { topic: "Operating Systems", mastery: 31, attempts: 2, lastAttempt: "Aug 16", trend: "flat" },
-  { topic: "Networks", mastery: 55, attempts: 4, lastAttempt: "Aug 15", trend: "down" },
-];
-
-const RECENT_ATTEMPTS = [
-  { date: "Aug 19", topic: "Data Structures", score: 8, total: 10, time: "4m 32s" },
-  { date: "Aug 18", topic: "Algorithms", score: 6, total: 10, time: "6m 18s" },
-  { date: "Aug 17", topic: "Data Structures", score: 7, total: 10, time: "5m 01s" },
-  { date: "Aug 16", topic: "Operating Systems", score: 3, total: 10, time: "8m 44s" },
-  { date: "Aug 15", topic: "Networks", score: 5, total: 8, time: "3m 55s" },
-];
+function dateStr(iso: string) {
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
 
 // ─── Icons (inline SVG) ───────────────────────────────────────────────────────
 
@@ -198,41 +127,15 @@ const Icon = {
   ),
 };
 
-const ACTIVITY_FEED = [
-  { type: "quiz", text: "Scored 8/10 on Data Structures quiz", time: "2h ago", color: "text-green-400", dot: "bg-green-400" },
-  { type: "upload", text: "Uploaded os_memory_management.pdf", time: "4h ago", color: "text-indigo-400", dot: "bg-indigo-400" },
-  { type: "chat", text: "Asked 6 questions in AI Teacher", time: "5h ago", color: "text-[#818cf8]", dot: "bg-[#818cf8]" },
-  { type: "quiz", text: "Scored 6/10 on Algorithms quiz", time: "Yesterday", color: "text-yellow-400", dot: "bg-yellow-400" },
-  { type: "upload", text: "Uploaded dynamic_programming_notes.pdf", time: "Yesterday", color: "text-indigo-400", dot: "bg-indigo-400" },
-  { type: "chat", text: "Started session on Binary Trees", time: "2 days ago", color: "text-[#818cf8]", dot: "bg-[#818cf8]" },
-];
-
-const SUGGESTED_TOPICS = [
-  { topic: "AVL Tree Rotations", doc: "lecture_week5_binary_trees.pdf", reason: "Low mastery — 3 questions unanswered" },
-  { topic: "Memoization Patterns", doc: "dynamic_programming_notes.pdf", reason: "Not practiced yet" },
-  { topic: "Page Replacement Algorithms", doc: "os_memory_management.pdf", reason: "New upload — ready to explore" },
-];
-
-// Weekly activity heatmap data (last 7 days, sessions per day)
-const WEEKLY_SESSIONS = [
-  { day: "Mon", sessions: 3, questions: 12 },
-  { day: "Tue", sessions: 1, questions: 4 },
-  { day: "Wed", sessions: 4, questions: 18 },
-  { day: "Thu", sessions: 2, questions: 9 },
-  { day: "Fri", sessions: 5, questions: 22 },
-  { day: "Sat", sessions: 0, questions: 0 },
-  { day: "Sun", sessions: 2, questions: 7 },
-];
-
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function StatusBadge({ status }: { status: DocStatus }) {
-  const styles: Record<DocStatus, string> = {
+function StatusBadge({ status }: { status: "ready" | "processing" | "error" }) {
+  const styles = {
     ready: "bg-green-500/15 text-green-400 border-green-500/20",
     processing: "bg-yellow-500/15 text-yellow-400 border-yellow-500/20",
     error: "bg-red-500/15 text-red-400 border-red-500/20",
   };
-  const labels: Record<DocStatus, string> = { ready: "Ready", processing: "Processing", error: "Error" };
+  const labels = { ready: "Ready", processing: "Processing", error: "Error" };
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-mono border ${styles[status]}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${status === "ready" ? "bg-green-400" : status === "processing" ? "bg-yellow-400 animate-pulse" : "bg-red-400"}`} />
@@ -273,121 +176,93 @@ function MasteryRing({ mastery, topic }: { mastery: number; topic: string }) {
 // ─── Views ────────────────────────────────────────────────────────────────────
 
 function DashboardView({ navigate }: { navigate: (v: View) => void }) {
-  const totalDocs = MOCK_DOCS.length;
-  const readyDocs = MOCK_DOCS.filter(d => d.status === "ready").length;
-  const avgMastery = Math.round(MOCK_PROGRESS.reduce((a, p) => a + p.mastery, 0) / MOCK_PROGRESS.length);
-  const totalQuizzes = RECENT_ATTEMPTS.length;
-  const totalQuestions = WEEKLY_SESSIONS.reduce((a, d) => a + d.questions, 0);
+  const [docs, setDocs] = useState<ApiDocument[]>([]);
+  const [progress, setProgress] = useState<ApiProgress[]>([]);
+  const [dueCards, setDueCards] = useState<ApiFlashcard[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const [activeStreak] = useState(5);
+  useEffect(() => {
+    Promise.all([fetchDocuments(), fetchProgress(), fetchDueFlashcards()])
+      .then(([d, p, fc]) => { setDocs(d); setProgress(p); setDueCards(fc); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const readyDocs = docs.filter(d => statusForDoc(d) === "ready").length;
+  const avgMastery = progress.length ? Math.round(progress.reduce((a, p) => a + p.mastery_score, 0) / progress.length) : 0;
+
   const [quickPrompt, setQuickPrompt] = useState("");
 
-  const maxSessions = Math.max(...WEEKLY_SESSIONS.map(d => d.sessions));
+  if (loading) {
+    return <div className="p-6 text-sm font-mono text-[#52525b]">Loading dashboard...</div>;
+  }
 
   return (
     <div className="p-6 space-y-6">
       {/* Welcome banner */}
       <div className="rounded-2xl bg-gradient-to-br from-indigo-600/30 via-indigo-500/10 to-transparent border border-indigo-500/20 p-6 flex items-center gap-6">
         <div className="flex-1 min-w-0">
-          <p className="font-mono text-xs text-indigo-400 uppercase tracking-widest mb-1">Wednesday, Aug 20</p>
-          <h2 className="font-mono font-bold text-2xl text-[#f4f4f5] mb-1">Good afternoon, Student</h2>
-          <p className="text-sm text-[#71717a]">You have 1 document processing and 2 topics below 60% mastery.</p>
-          <div className="flex items-center gap-2 mt-3">
-            <span className="flex items-center gap-1.5 text-xs font-mono text-orange-400 bg-orange-500/10 border border-orange-500/20 px-2.5 py-1 rounded-full">
-              🔥 {activeStreak}-day streak
-            </span>
-            <span className="text-xs font-mono text-[#52525b]">{totalQuestions} questions this week</span>
-          </div>
+          <p className="font-mono text-xs text-indigo-400 uppercase tracking-widest mb-1">{new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}</p>
+          <h2 className="font-mono font-bold text-2xl text-[#f4f4f5] mb-1">Welcome back, Student</h2>
+          <p className="text-sm text-[#71717a]">{readyDocs} document{readyDocs !== 1 ? "s" : ""} ready, {dueCards.length} flashcard{dueCards.length !== 1 ? "s" : ""} due for review.</p>
         </div>
         <div className="hidden sm:flex flex-col gap-2 shrink-0">
           <button onClick={() => navigate("chat")} className="px-4 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-mono font-semibold transition-colors duration-150 flex items-center gap-2">
-            {Icon.chat} Continue Studying
+            {Icon.chat} Ask AI Teacher
           </button>
           <button onClick={() => navigate("quiz")} className="px-4 py-2.5 rounded-xl border border-[#3f3f46] hover:border-[#52525b] hover:bg-[#27272a] text-[#a1a1aa] text-xs font-mono transition-colors duration-150 flex items-center gap-2">
-            {Icon.quiz} Quick Quiz
+            {Icon.quiz} Practice Quiz
           </button>
         </div>
       </div>
 
       {/* Stat tiles */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {[
-          { label: "Documents", value: readyDocs, sub: `${totalDocs} total`, color: "text-indigo-400", bg: "bg-indigo-500/10", border: "border-indigo-500/20", onClick: () => navigate("documents") },
-          { label: "Avg Mastery", value: `${avgMastery}%`, sub: "across all topics", color: "text-green-400", bg: "bg-green-500/10", border: "border-green-500/20", onClick: () => navigate("progress") },
-          { label: "Quizzes Taken", value: totalQuizzes, sub: "this session", color: "text-[#818cf8]", bg: "bg-indigo-500/10", border: "border-indigo-500/20", onClick: () => navigate("quiz") },
-          { label: "This Week", value: totalQuestions, sub: "questions answered", color: "text-yellow-400", bg: "bg-yellow-500/10", border: "border-yellow-500/20", onClick: () => navigate("progress") },
-        ].map(tile => (
-          <button
-            key={tile.label}
-            onClick={tile.onClick}
-            className={`rounded-xl border ${tile.border} ${tile.bg} p-4 text-left hover:brightness-110 transition-all duration-150 group`}
-          >
-            <div className={`font-mono font-bold text-3xl ${tile.color}`}>{tile.value}</div>
-            <div className="font-mono text-xs text-[#f4f4f5] mt-1">{tile.label}</div>
-            <div className="font-mono text-[10px] text-[#52525b] mt-0.5">{tile.sub}</div>
-          </button>
-        ))}
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+        <button onClick={() => navigate("documents")} className="rounded-xl border border-indigo-500/20 bg-indigo-500/10 p-4 text-left hover:brightness-110 transition-all duration-150">
+          <div className="font-mono font-bold text-3xl text-indigo-400">{readyDocs}</div>
+          <div className="font-mono text-xs text-[#f4f4f5] mt-1">Documents</div>
+          <div className="font-mono text-[10px] text-[#52525b] mt-0.5">{docs.length} total</div>
+        </button>
+        <button onClick={() => navigate("progress")} className="rounded-xl border border-green-500/20 bg-green-500/10 p-4 text-left hover:brightness-110 transition-all duration-150">
+          <div className="font-mono font-bold text-3xl text-green-400">{avgMastery}%</div>
+          <div className="font-mono text-xs text-[#f4f4f5] mt-1">Avg Mastery</div>
+          <div className="font-mono text-[10px] text-[#52525b] mt-0.5">across all topics</div>
+        </button>
+        <button onClick={() => navigate("chat")} className="rounded-xl border border-yellow-500/20 bg-yellow-500/10 p-4 text-left hover:brightness-110 transition-all duration-150">
+          <div className="font-mono font-bold text-3xl text-yellow-400">{dueCards.length}</div>
+          <div className="font-mono text-xs text-[#f4f4f5] mt-1">Flashcards Due</div>
+          <div className="font-mono text-[10px] text-[#52525b] mt-0.5">ready for review</div>
+        </button>
       </div>
 
       {/* Main grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
 
-        {/* Left col: mastery + weekly activity */}
+        {/* Left col: mastery */}
         <div className="lg:col-span-2 space-y-5">
-
-          {/* Topic mastery mini-bars */}
           <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider">Topic Mastery</h3>
               <button onClick={() => navigate("progress")} className="text-xs font-mono text-indigo-400 hover:text-indigo-300 transition-colors">View all →</button>
             </div>
-            <div className="space-y-3">
-              {MOCK_PROGRESS.map(p => {
-                const color = p.mastery >= 75 ? "#22c55e" : p.mastery >= 50 ? "#6366f1" : p.mastery >= 30 ? "#f59e0b" : "#ef4444";
-                return (
-                  <div key={p.topic} className="flex items-center gap-3">
-                    <span className="font-mono text-xs text-[#a1a1aa] w-36 truncate shrink-0">{p.topic}</span>
-                    <div className="flex-1 h-2 bg-[#3f3f46] rounded-full overflow-hidden">
-                      <div className="h-full rounded-full transition-all duration-700" style={{ width: `${p.mastery}%`, backgroundColor: color }} />
+            {progress.length === 0 ? (
+              <p className="text-xs font-mono text-[#52525b]">No progress data yet. Take a quiz to start tracking mastery.</p>
+            ) : (
+              <div className="space-y-3">
+                {progress.map(p => {
+                  const color = p.mastery_score >= 75 ? "#22c55e" : p.mastery_score >= 50 ? "#6366f1" : p.mastery_score >= 30 ? "#f59e0b" : "#ef4444";
+                  return (
+                    <div key={p.id} className="flex items-center gap-3">
+                      <span className="font-mono text-xs text-[#a1a1aa] w-36 truncate shrink-0">{p.topics?.name ?? "Unknown"}</span>
+                      <div className="flex-1 h-2 bg-[#3f3f46] rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${p.mastery_score}%`, backgroundColor: color }} />
+                      </div>
+                      <span className="font-mono text-xs w-8 text-right shrink-0" style={{ color }}>{Math.round(p.mastery_score)}</span>
                     </div>
-                    <span className="font-mono text-xs w-8 text-right shrink-0" style={{ color }}>{p.mastery}</span>
-                    <span className={`shrink-0 ${p.trend === "up" ? "text-green-400" : p.trend === "down" ? "text-red-400" : "text-[#52525b]"}`}>
-                      {p.trend === "up" ? Icon.arrowUp : p.trend === "down" ? Icon.arrowDown : Icon.minus}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Weekly activity chart */}
-          <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-5">
-            <div className="flex items-center justify-between mb-5">
-              <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider">Weekly Sessions</h3>
-              <span className="text-xs font-mono text-[#52525b]">Aug 14 – 20</span>
-            </div>
-            <div className="flex items-end gap-3 h-24">
-              {WEEKLY_SESSIONS.map(d => {
-                const height = maxSessions > 0 ? (d.sessions / maxSessions) * 100 : 0;
-                const isToday = d.day === "Sun";
-                return (
-                  <div key={d.day} className="flex-1 flex flex-col items-center gap-2 group">
-                    <div className="relative w-full flex items-end justify-center" style={{ height: "80px" }}>
-                      <div
-                        className={`w-full rounded-t-md transition-all duration-500 ${isToday ? "bg-indigo-500" : "bg-[#3f3f46] group-hover:bg-indigo-500/50"}`}
-                        style={{ height: `${Math.max(height, d.sessions > 0 ? 8 : 3)}%` }}
-                      />
-                      {d.sessions > 0 && (
-                        <div className="absolute -top-5 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 bg-[#18181b] border border-[#3f3f46] rounded px-1.5 py-0.5 text-[10px] font-mono text-[#f4f4f5] whitespace-nowrap pointer-events-none">
-                          {d.sessions}s · {d.questions}q
-                        </div>
-                      )}
-                    </div>
-                    <span className={`font-mono text-[10px] ${isToday ? "text-indigo-400" : "text-[#52525b]"}`}>{d.day}</span>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Quick ask */}
@@ -398,7 +273,7 @@ function DashboardView({ navigate }: { navigate: (v: View) => void }) {
                 value={quickPrompt}
                 onChange={e => setQuickPrompt(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && quickPrompt.trim()) { navigate("chat"); } }}
-                placeholder="Ask your AI teacher anything…"
+                placeholder="Ask your AI teacher anything..."
                 className="flex-1 bg-[#1c1c1f] border border-[#3f3f46] rounded-xl px-4 py-3 text-sm text-[#f4f4f5] placeholder:text-[#52525b] focus:outline-none focus:border-indigo-500 font-sans transition-colors duration-150"
               />
               <button
@@ -408,53 +283,20 @@ function DashboardView({ navigate }: { navigate: (v: View) => void }) {
                 {Icon.send}
               </button>
             </div>
-            <div className="flex flex-wrap gap-2 mt-3">
-              {["Explain BST rotations", "What is memoization?", "Difference between TCP and UDP"].map(q => (
-                <button
-                  key={q}
-                  onClick={() => { setQuickPrompt(q); navigate("chat"); }}
-                  className="px-2.5 py-1 rounded-lg bg-[#1c1c1f] border border-[#3f3f46] text-xs font-mono text-[#71717a] hover:text-[#f4f4f5] hover:border-[#52525b] transition-colors duration-150"
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
           </div>
         </div>
 
-        {/* Right col: activity feed + suggestions */}
+        {/* Right col: recent docs */}
         <div className="space-y-5">
-
-          {/* Suggested next */}
-          <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-5">
-            <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider mb-4">Suggested Next</h3>
-            <div className="space-y-3">
-              {SUGGESTED_TOPICS.map((s, i) => (
-                <button
-                  key={i}
-                  onClick={() => navigate("chat")}
-                  className="w-full text-left p-3 rounded-xl border border-[#3f3f46] hover:border-indigo-500/40 hover:bg-indigo-500/5 transition-all duration-150 group"
-                >
-                  <div className="flex items-start gap-2">
-                    <span className="w-5 h-5 rounded-md bg-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-mono font-bold">{i + 1}</span>
-                    <div className="min-w-0">
-                      <p className="font-mono text-xs text-[#d4d4d8] font-semibold group-hover:text-indigo-300 transition-colors truncate">{s.topic}</p>
-                      <p className="text-[10px] text-[#52525b] mt-0.5 truncate">{s.reason}</p>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Recent docs */}
           <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider">Recent Files</h3>
               <button onClick={() => navigate("documents")} className="text-xs font-mono text-indigo-400 hover:text-indigo-300 transition-colors">All →</button>
             </div>
             <div className="space-y-2">
-              {MOCK_DOCS.slice(0, 4).map(doc => (
+              {docs.length === 0 ? (
+                <p className="text-xs font-mono text-[#52525b]">No documents yet. Upload a PDF to get started.</p>
+              ) : docs.slice(0, 5).map(doc => (
                 <button
                   key={doc.id}
                   onClick={() => navigate("documents")}
@@ -465,28 +307,11 @@ function DashboardView({ navigate }: { navigate: (v: View) => void }) {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-mono text-xs text-[#d4d4d8] truncate group-hover:text-[#f4f4f5]">{doc.title}</p>
-                    <p className="font-mono text-[10px] text-[#52525b]">{doc.topic}</p>
+                    <p className="font-mono text-[10px] text-[#52525b]">{doc.topic || "Untagged"}</p>
                   </div>
-                  <StatusBadge status={doc.status} />
+                  <StatusBadge status={statusForDoc(doc)} />
                 </button>
               ))}
-            </div>
-          </div>
-
-          {/* Activity feed */}
-          <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-5">
-            <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider mb-4">Activity</h3>
-            <div className="relative">
-              <div className="absolute left-[5px] top-0 bottom-0 w-px bg-[#3f3f46]" />
-              <div className="space-y-4 pl-5">
-                {ACTIVITY_FEED.map((a, i) => (
-                  <div key={i} className="relative">
-                    <div className={`absolute -left-5 top-1.5 w-2.5 h-2.5 rounded-full ${a.dot} ring-2 ring-[#27272a] translate-x-0`} />
-                    <p className={`text-xs font-mono ${a.color} leading-snug`}>{a.text}</p>
-                    <p className="text-[10px] font-mono text-[#3f3f46] mt-0.5">{a.time}</p>
-                  </div>
-                ))}
-              </div>
             </div>
           </div>
         </div>
@@ -497,25 +322,59 @@ function DashboardView({ navigate }: { navigate: (v: View) => void }) {
 
 function DocumentsView() {
   const [dragging, setDragging] = useState(false);
-  const [docs, setDocs] = useState(MOCK_DOCS);
+  const [docs, setDocs] = useState<ApiDocument[]>([]);
+  const [topics, setTopics] = useState<ApiTopic[]>([]);
+  const [selectedTopic, setSelectedTopic] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function loadDocs() {
+    fetchDocuments().then(setDocs).catch(e => setError(e.message)).finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    loadDocs();
+    fetchTopics().then(setTopics).catch(() => {});
+  }, []);
+
+  async function handleFile(file: File) {
+    setUploading(true);
+    setError("");
+    try {
+      await uploadDocument(file, selectedTopic || undefined);
+      await loadDocs();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setDragging(false);
     const file = e.dataTransfer.files[0];
-    if (!file) return;
-    const newDoc: Document = {
-      id: `d${Date.now()}`, title: file.name,
-      topic: "Untagged", status: "processing",
-      pages: 0, date: "Aug 20, 2026", size: `${(file.size / 1024 / 1024).toFixed(1)} MB`,
-    };
-    setDocs(prev => [newDoc, ...prev]);
-    setTimeout(() => setDocs(prev => prev.map(d => d.id === newDoc.id ? { ...d, status: "ready", pages: 22 } : d)), 2800);
+    if (file) handleFile(file);
+  }
+
+  function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) handleFile(file);
+    e.target.value = "";
+  }
+
+  if (loading) {
+    return <div className="p-8 text-sm font-mono text-[#52525b]">Loading documents...</div>;
   }
 
   return (
     <div className="p-8 space-y-6">
+      {error && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm font-mono text-red-400">{error}</div>
+      )}
+
       {/* Upload zone */}
       <div
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
@@ -525,7 +384,7 @@ function DocumentsView() {
         className={`relative border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all duration-200 select-none
           ${dragging ? "border-indigo-400 bg-indigo-500/10" : "border-[#3f3f46] hover:border-[#6366f1]/60 hover:bg-[#27272a]"}`}
       >
-        <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md" className="hidden" />
+        <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md" className="hidden" onChange={handleFileInput} />
         <div className="flex flex-col items-center gap-3">
           <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-colors duration-200 ${dragging ? "bg-indigo-500/20 text-indigo-400" : "bg-[#3f3f46] text-[#a1a1aa]"}`}>
             <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
@@ -533,62 +392,83 @@ function DocumentsView() {
             </svg>
           </div>
           <div>
-            <p className="font-mono font-semibold text-sm text-[#f4f4f5]">Drop PDF or click to upload</p>
+            <p className="font-mono font-semibold text-sm text-[#f4f4f5]">
+              {uploading ? "Uploading & indexing..." : "Drop PDF or click to upload"}
+            </p>
             <p className="text-xs text-[#71717a] mt-1">Supports .pdf, .txt, .md — text-based only</p>
           </div>
         </div>
+        {topics.length > 0 && (
+          <div className="mt-4 flex items-center justify-center gap-3" onClick={e => e.stopPropagation()}>
+            <span className="text-xs font-mono text-[#52525b]">Topic:</span>
+            <select
+              value={selectedTopic}
+              onChange={e => setSelectedTopic(e.target.value)}
+              className="bg-[#27272a] border border-[#3f3f46] rounded-lg px-3 py-1.5 text-xs font-mono text-[#c7d2fe] focus:outline-none focus:border-indigo-500"
+            >
+              <option value="">None</option>
+              {topics.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Documents table */}
       <div className="rounded-xl overflow-hidden border border-[#3f3f46]">
         <div className="px-4 py-3 bg-[#27272a] border-b border-[#3f3f46] flex items-center justify-between">
           <span className="font-mono text-xs text-[#a1a1aa] uppercase tracking-wider">Documents — {docs.length} files</span>
-          <div className="flex gap-2">
-            {["All", "Ready", "Processing"].map(f => (
-              <button key={f} className="px-2.5 py-1 rounded-md text-xs font-mono text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#3f3f46] transition-colors duration-150">{f}</button>
-            ))}
-          </div>
         </div>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-[#3f3f46]">
-              {["File", "Topic", "Pages", "Size", "Added", "Status"].map(h => (
-                <th key={h} className="px-4 py-3 text-left font-mono text-xs text-[#52525b] uppercase tracking-wider">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {docs.map((doc, i) => (
-              <tr
-                key={doc.id}
-                className={`border-b border-[#27272a] hover:bg-[#27272a] transition-colors duration-150 cursor-pointer ${i === docs.length - 1 ? "border-b-0" : ""}`}
-              >
-                <td className="px-4 py-3">
-                  <span className="font-mono text-xs text-[#c7d2fe]">{doc.title}</span>
-                </td>
-                <td className="px-4 py-3">
-                  <span className="px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-mono">{doc.topic}</span>
-                </td>
-                <td className="px-4 py-3 font-mono text-xs text-[#71717a]">{doc.pages > 0 ? doc.pages : "—"}</td>
-                <td className="px-4 py-3 font-mono text-xs text-[#71717a]">{doc.size}</td>
-                <td className="px-4 py-3 font-mono text-xs text-[#52525b]">{doc.date}</td>
-                <td className="px-4 py-3"><StatusBadge status={doc.status} /></td>
+        {docs.length === 0 ? (
+          <div className="p-8 text-center text-sm font-mono text-[#52525b]">No documents yet. Upload a PDF to get started.</div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[#3f3f46]">
+                {["File", "Topic", "Added", "Status"].map(h => (
+                  <th key={h} className="px-4 py-3 text-left font-mono text-xs text-[#52525b] uppercase tracking-wider">{h}</th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {docs.map((doc, i) => (
+                <tr
+                  key={doc.id}
+                  className={`border-b border-[#27272a] hover:bg-[#27272a] transition-colors duration-150 cursor-pointer ${i === docs.length - 1 ? "border-b-0" : ""}`}
+                >
+                  <td className="px-4 py-3">
+                    <span className="font-mono text-xs text-[#c7d2fe]">{doc.title}</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-mono">{doc.topic || "Untagged"}</span>
+                  </td>
+                  <td className="px-4 py-3 font-mono text-xs text-[#52525b]">{dateStr(doc.created_at)}</td>
+                  <td className="px-4 py-3"><StatusBadge status={statusForDoc(doc)} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
 }
 
 function ChatView() {
-  const [messages, setMessages] = useState<Message[]>(MOCK_MESSAGES);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [selectedDoc, setSelectedDoc] = useState("d1");
+  const [docs, setDocs] = useState<ApiDocument[]>([]);
+  const [selectedDoc, setSelectedDoc] = useState("");
   const [expandedCitations, setExpandedCitations] = useState<Set<string>>(new Set());
   const [typing, setTyping] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    fetchDocuments().then(d => {
+      const ready = d.filter(x => statusForDoc(x) === "ready");
+      setDocs(ready);
+      if (ready.length > 0 && !selectedDoc) setSelectedDoc(ready[0].id);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -602,25 +482,44 @@ function ChatView() {
     });
   }
 
-  function sendMessage() {
-    if (!input.trim()) return;
-    const userMsg: Message = { id: `m${Date.now()}`, role: "user", content: input, timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) };
+  async function sendMessage() {
+    const q = input.trim();
+    if (!q) return;
+    const userMsg: ChatMessage = { id: `u${Date.now()}`, role: "user", content: q, timestamp: now() };
     setMessages(prev => [...prev, userMsg]);
     setInput("");
     setTyping(true);
-    setTimeout(() => {
-      setTyping(false);
-      const aiMsg: Message = {
-        id: `m${Date.now() + 1}`, role: "ai",
-        content: "That's a great question. Based on your uploaded notes, this concept relates to the material covered in the lecture on tree rotations. The key insight is that maintaining structural invariants during mutations is what gives balanced trees their logarithmic guarantees.",
-        citations: [{ snippet: "The rotation operation preserves the BST property while adjusting heights...", page: 9 }],
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+
+    try {
+      const { chunks } = await searchChunks(q, selectedDoc || undefined);
+      const citations = chunks.slice(0, 3).map(c => ({
+        snippet: c.content.slice(0, 200) + (c.content.length > 200 ? "..." : ""),
+        page: null,
+      }));
+
+      let aiContent: string;
+      if (chunks.length === 0) {
+        aiContent = "I couldn't find relevant material in your uploaded documents for this question. Try uploading notes on this topic, or rephrase your question.";
+      } else {
+        aiContent = `Based on your course material, here's what I found:\n\n${citations.map((c, i) => `**[${i + 1}]** "${c.snippet}"`).join("\n\n")}\n\nWould you like me to explain any of these concepts in more detail?`;
+      }
+
+      const aiMsg: ChatMessage = {
+        id: `a${Date.now()}`, role: "ai", content: aiContent,
+        citations: citations.length > 0 ? citations : undefined,
+        timestamp: now(),
       };
       setMessages(prev => [...prev, aiMsg]);
-    }, 1800);
+    } catch {
+      setMessages(prev => [...prev, {
+        id: `e${Date.now()}`, role: "ai",
+        content: "Sorry, something went wrong while searching your documents. Please try again.",
+        timestamp: now(),
+      }]);
+    } finally {
+      setTyping(false);
+    }
   }
-
-  const readyDocs = MOCK_DOCS.filter(d => d.status === "ready");
 
   function renderContent(content: string) {
     return content.split("\n").map((line, i) => {
@@ -648,16 +547,26 @@ function ChatView() {
           onChange={e => setSelectedDoc(e.target.value)}
           className="flex-1 max-w-xs bg-[#27272a] border border-[#3f3f46] rounded-lg px-3 py-1.5 text-xs font-mono text-[#c7d2fe] focus:outline-none focus:border-indigo-500 cursor-pointer"
         >
-          {readyDocs.map(d => <option key={d.id} value={d.id}>{d.title}</option>)}
+          <option value="">All documents</option>
+          {docs.map(d => <option key={d.id} value={d.id}>{d.title}</option>)}
         </select>
         <div className="flex items-center gap-1.5 ml-auto">
-          <span className="w-2 h-2 rounded-full bg-green-400"></span>
+          <span className="w-2 h-2 rounded-full bg-green-400" />
           <span className="text-xs font-mono text-[#71717a]">RAG active</span>
         </div>
       </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
+        {messages.length === 0 && (
+          <div className="text-center py-20">
+            <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mx-auto mb-4 text-indigo-400">
+              {Icon.sparkle}
+            </div>
+            <h3 className="font-mono font-semibold text-[#f4f4f5] mb-1">Ask your AI teacher</h3>
+            <p className="text-sm text-[#71717a] max-w-sm mx-auto">Questions are grounded in your uploaded course material via semantic search.</p>
+          </div>
+        )}
         {messages.map(msg => (
           <div key={msg.id} className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
             <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-xs font-mono font-bold ${msg.role === "user" ? "bg-indigo-500 text-white" : "bg-[#3f3f46] text-[#818cf8]"}`}>
@@ -676,7 +585,7 @@ function ChatView() {
                         className="w-full flex items-center gap-2 px-3 py-2 bg-[#27272a] hover:bg-[#3f3f46] transition-colors duration-150 text-left"
                       >
                         <span className="text-indigo-400">{Icon.sparkle}</span>
-                        <span className="text-xs font-mono text-[#818cf8]">Source — p.{c.page}</span>
+                        <span className="text-xs font-mono text-[#818cf8]">Source {ci + 1}</span>
                         <span className={`ml-auto text-[#52525b] transition-transform duration-200 ${expandedCitations.has(`${msg.id}-${ci}`) ? "rotate-180" : ""}`}>{Icon.chevronDown}</span>
                       </button>
                       {expandedCitations.has(`${msg.id}-${ci}`) && (
@@ -712,7 +621,7 @@ function ChatView() {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-            placeholder="Ask a question about your notes…"
+            placeholder="Ask a question about your notes..."
             rows={1}
             className="flex-1 bg-[#27272a] border border-[#3f3f46] rounded-xl px-4 py-3 text-sm text-[#f4f4f5] placeholder:text-[#52525b] focus:outline-none focus:border-indigo-500 resize-none font-sans transition-colors duration-150"
           />
@@ -724,134 +633,138 @@ function ChatView() {
             {Icon.send}
           </button>
         </div>
-        <p className="mt-2 text-[10px] font-mono text-[#52525b]">Shift+Enter for newline · Answers grounded in your uploaded document</p>
+        <p className="mt-2 text-[10px] font-mono text-[#52525b]">Shift+Enter for newline · Answers grounded in your uploaded documents</p>
       </div>
     </div>
   );
 }
 
 function QuizView() {
-  const [phase, setPhase] = useState<QuizPhase>("generate");
-  const [topic, setTopic] = useState("Data Structures");
-  const [count, setCount] = useState(4);
-  const [generating, setGenerating] = useState(false);
+  const [phase, setPhase] = useState<QuizPhase>("list");
+  const [quizzes, setQuizzes] = useState<ApiQuiz[]>([]);
+  const [selectedQuiz, setSelectedQuiz] = useState<ApiQuiz | null>(null);
   const [currentQ, setCurrentQ] = useState(0);
-  const [selected, setSelected] = useState<Record<number, number>>({});
+  const [selected, setSelected] = useState<SelectedAnswers>({});
   const [submitted, setSubmitted] = useState(false);
+  const [quizResults, setQuizResults] = useState<{ score: number; results: { questionId: string; isCorrect: boolean; explanation: string }[] } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  function generate() {
-    setGenerating(true);
-    setTimeout(() => { setGenerating(false); setPhase("taking"); setCurrentQ(0); setSelected({}); setSubmitted(false); }, 1800);
+  useEffect(() => {
+    fetchQuizzes().then(setQuizzes).catch(e => setError(e.message)).finally(() => setLoading(false));
+  }, []);
+
+  function selectOption(qi: number, answer: string) {
+    if (!submitted) setSelected(prev => ({ ...prev, [qi]: answer }));
   }
 
-  function selectOption(qi: number, oi: number) {
-    if (!submitted) setSelected(prev => ({ ...prev, [qi]: oi }));
+  async function startQuiz(quiz: ApiQuiz) {
+    setLoading(true);
+    try {
+      const full = await fetchQuiz(quiz.id);
+      setSelectedQuiz(full);
+      setCurrentQ(0);
+      setSelected({});
+      setSubmitted(false);
+      setQuizResults(null);
+      setPhase("taking");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to load quiz");
+    } finally {
+      setLoading(false);
+    }
   }
 
-  function submitQuiz() {
+  async function handleSubmit() {
+    if (!selectedQuiz?.questions) return;
     setSubmitted(true);
-    setTimeout(() => setPhase("results"), 800);
+    try {
+      const answers = selectedQuiz.questions.map((q, i) => ({
+        questionId: q.id,
+        answer: selected[i] || "",
+      }));
+      const result = await submitQuiz(selectedQuiz.id, answers);
+      setQuizResults(result);
+      setPhase("results");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to submit quiz");
+      setSubmitted(false);
+    }
   }
 
-  const score = MOCK_QUIZ.slice(0, count).reduce((acc, q, i) => acc + (selected[i] === q.correct ? 1 : 0), 0);
+  const questions = selectedQuiz?.questions || [];
+  const count = questions.length;
 
-  const topics = ["Data Structures", "Algorithms", "Operating Systems", "Networks"];
+  if (loading && phase === "list") {
+    return <div className="p-6 text-sm font-mono text-[#52525b]">Loading quizzes...</div>;
+  }
 
-  if (phase === "generate") {
+  // Phase: List quizzes
+  if (phase === "list") {
     return (
-      <div className="p-6 w-full max-w-lg">
-        <h2 className="font-mono font-bold text-xl text-[#f4f4f5] mb-1">Generate Quiz</h2>
-        <p className="text-sm text-[#71717a] mb-8">AI generates multiple-choice questions grounded in your uploaded notes.</p>
-        <div className="space-y-6">
-          <div>
-            <label className="block text-xs font-mono text-[#a1a1aa] uppercase tracking-wider mb-2">Topic</label>
-            <div className="grid grid-cols-2 gap-2">
-              {topics.map(t => (
-                <button
-                  key={t}
-                  onClick={() => setTopic(t)}
-                  className={`px-4 py-3 rounded-xl text-sm font-mono text-left transition-all duration-150 border ${topic === t ? "border-indigo-500 bg-indigo-500/15 text-indigo-300" : "border-[#3f3f46] bg-[#27272a] text-[#71717a] hover:border-[#6366f1]/50 hover:text-[#f4f4f5]"}`}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs font-mono text-[#a1a1aa] uppercase tracking-wider mb-3">
-              Question Count — <span className="text-indigo-400">{count}</span>
-            </label>
-            <input
-              type="range" min={2} max={10} value={count}
-              onChange={e => setCount(+e.target.value)}
-              className="w-full accent-indigo-500 cursor-pointer"
-            />
-            <div className="flex justify-between text-xs font-mono text-[#52525b] mt-1">
-              <span>2</span><span>10</span>
-            </div>
-          </div>
-          <div className="pt-2 border-t border-[#3f3f46] space-y-2">
-            <div className="flex justify-between text-xs font-mono">
-              <span className="text-[#52525b]">Source document</span>
-              <span className="text-[#c7d2fe]">lecture_week5_binary_trees.pdf</span>
-            </div>
-            <div className="flex justify-between text-xs font-mono">
-              <span className="text-[#52525b]">Estimated time</span>
-              <span className="text-[#71717a]">~{count * 45}s</span>
-            </div>
-          </div>
-          <button
-            onClick={generate}
-            disabled={generating}
-            className="w-full py-3 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-60 text-white font-mono font-semibold text-sm flex items-center justify-center gap-2 transition-colors duration-150"
-          >
-            {generating ? (
-              <>
-                <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-                </svg>
-                Generating…
-              </>
-            ) : (
-              <>{Icon.sparkle} Generate {count} Questions</>
-            )}
-          </button>
+      <div className="p-6 space-y-6">
+        {error && (
+          <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm font-mono text-red-400">{error}</div>
+        )}
+        <div>
+          <h2 className="font-mono font-bold text-xl text-[#f4f4f5] mb-1">Practice Quizzes</h2>
+          <p className="text-sm text-[#71717a]">Select a quiz to test your knowledge. Quizzes are auto-graded with explanations.</p>
         </div>
+        {quizzes.length === 0 ? (
+          <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-10 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mx-auto mb-4 text-indigo-400">
+              {Icon.quiz}
+            </div>
+            <h3 className="font-mono font-semibold text-[#f4f4f5] mb-1">No quizzes yet</h3>
+            <p className="text-sm text-[#71717a]">Quizzes will appear here once generated from your uploaded documents.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {quizzes.map(q => (
+              <button
+                key={q.id}
+                onClick={() => startQuiz(q)}
+                className="text-left p-4 rounded-xl border border-[#3f3f46] bg-[#27272a] hover:border-indigo-500/40 hover:bg-indigo-500/5 transition-all duration-150"
+              >
+                <p className="font-mono text-sm text-[#f4f4f5] font-semibold">{q.title}</p>
+                <p className="text-xs font-mono text-[#52525b] mt-1">{q.questions?.length ?? "?"} questions · {dateStr(q.created_at)}</p>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
 
-  if (phase === "taking") {
-    const q = MOCK_QUIZ[currentQ];
-    const progress = ((currentQ + (selected[currentQ] !== undefined ? 1 : 0)) / count) * 100;
+  // Phase: Taking quiz
+  if (phase === "taking" && questions.length > 0) {
+    const q = questions[currentQ];
     const allAnswered = Object.keys(selected).length === count;
 
     return (
       <div className="p-6 w-full max-w-2xl">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
-            <span className="font-mono text-xs text-[#71717a]">{topic}</span>
+            <span className="font-mono text-xs text-[#71717a]">{selectedQuiz?.title}</span>
             <span className="text-[#3f3f46]">/</span>
             <span className="font-mono text-xs text-[#a1a1aa]">{currentQ + 1} of {count}</span>
           </div>
-          <button onClick={() => setPhase("generate")} className="text-xs font-mono text-[#52525b] hover:text-[#f4f4f5] transition-colors">Exit</button>
+          <button onClick={() => { setPhase("list"); setSelectedQuiz(null); }} className="text-xs font-mono text-[#52525b] hover:text-[#f4f4f5] transition-colors">Exit</button>
         </div>
 
-        {/* Progress bar */}
         <div className="h-1 bg-[#27272a] rounded-full mb-8 overflow-hidden">
-          <div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${progress}%` }} />
+          <div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${((currentQ + 1) / count) * 100}%` }} />
         </div>
 
         <div className="space-y-6">
           <h3 className="font-mono font-semibold text-base text-[#f4f4f5] leading-relaxed">{q.question}</h3>
           <div className="space-y-3">
             {q.options.map((opt, oi) => {
-              const isSelected = selected[currentQ] === oi;
+              const isSelected = selected[currentQ] === opt;
               return (
                 <button
                   key={oi}
-                  onClick={() => selectOption(currentQ, oi)}
+                  onClick={() => selectOption(currentQ, opt)}
                   className={`w-full text-left px-4 py-3.5 rounded-xl border text-sm font-mono transition-all duration-150 flex items-center gap-3
                     ${isSelected ? "border-indigo-500 bg-indigo-500/15 text-indigo-200" : "border-[#3f3f46] bg-[#27272a] text-[#a1a1aa] hover:border-[#6366f1]/50 hover:text-[#f4f4f5]"}`}
                 >
@@ -867,7 +780,7 @@ function QuizView() {
           <div className="flex gap-3 pt-2">
             {currentQ > 0 && (
               <button onClick={() => setCurrentQ(q => q - 1)} className="px-5 py-2.5 rounded-xl border border-[#3f3f46] text-sm font-mono text-[#71717a] hover:text-[#f4f4f5] hover:border-[#52525b] transition-colors duration-150">
-                ← Back
+                Back
               </button>
             )}
             {currentQ < count - 1 ? (
@@ -876,15 +789,15 @@ function QuizView() {
                 disabled={selected[currentQ] === undefined}
                 className="flex-1 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-mono font-semibold transition-colors duration-150"
               >
-                Next →
+                Next
               </button>
             ) : (
               <button
-                onClick={submitQuiz}
-                disabled={!allAnswered}
+                onClick={handleSubmit}
+                disabled={!allAnswered || submitted}
                 className="flex-1 py-2.5 rounded-xl bg-green-500 hover:bg-green-400 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-mono font-semibold transition-colors duration-150"
               >
-                Submit Quiz
+                {submitted ? "Submitting..." : "Submit Quiz"}
               </button>
             )}
           </div>
@@ -893,147 +806,158 @@ function QuizView() {
     );
   }
 
-  // Results
-  const pct = Math.round((score / count) * 100);
-  return (
-    <div className="p-6 w-full max-w-2xl space-y-8">
-      <div className="flex items-start justify-between">
-        <div>
-          <h2 className="font-mono font-bold text-xl text-[#f4f4f5]">Quiz Complete</h2>
-          <p className="text-sm text-[#71717a] mt-1">{topic} · {count} questions</p>
-        </div>
-        <button onClick={() => setPhase("generate")} className="px-4 py-2 rounded-xl border border-[#3f3f46] text-xs font-mono text-[#71717a] hover:text-[#f4f4f5] hover:border-[#52525b] transition-colors">
-          New Quiz
-        </button>
-      </div>
-
-      {/* Score card */}
-      <div className="bg-[#27272a] rounded-2xl p-6 border border-[#3f3f46] flex items-center gap-8">
-        <div className="text-center">
-          <div className="font-mono font-bold text-5xl" style={{ color: pct >= 80 ? "#22c55e" : pct >= 60 ? "#6366f1" : "#f59e0b" }}>{score}/{count}</div>
-          <div className="text-xs font-mono text-[#52525b] mt-1">Score</div>
-        </div>
-        <div className="flex-1 space-y-2">
-          <div className="flex justify-between text-xs font-mono">
-            <span className="text-[#71717a]">Accuracy</span>
-            <span style={{ color: pct >= 80 ? "#22c55e" : pct >= 60 ? "#6366f1" : "#f59e0b" }}>{pct}%</span>
+  // Phase: Results
+  if (phase === "results" && quizResults) {
+    const score = quizResults.score;
+    const pct = Math.round(score);
+    return (
+      <div className="p-6 w-full max-w-2xl space-y-8">
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 className="font-mono font-bold text-xl text-[#f4f4f5]">Quiz Complete</h2>
+            <p className="text-sm text-[#71717a] mt-1">{selectedQuiz?.title}</p>
           </div>
-          <div className="h-2 bg-[#3f3f46] rounded-full overflow-hidden">
-            <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, backgroundColor: pct >= 80 ? "#22c55e" : pct >= 60 ? "#6366f1" : "#f59e0b" }} />
-          </div>
-          <div className="text-xs font-mono text-[#52525b]">{pct >= 80 ? "Excellent — keep it up!" : pct >= 60 ? "Good progress — review weak areas." : "Needs more practice — re-read the material."}</div>
+          <button onClick={() => { setPhase("list"); setSelectedQuiz(null); }} className="px-4 py-2 rounded-xl border border-[#3f3f46] text-xs font-mono text-[#71717a] hover:text-[#f4f4f5] hover:border-[#52525b] transition-colors">
+            Back to Quizzes
+          </button>
         </div>
-      </div>
 
-      {/* Per-question breakdown */}
-      <div className="space-y-3">
-        <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider">Review</h3>
-        {MOCK_QUIZ.slice(0, count).map((q, i) => {
-          const correct = selected[i] === q.correct;
-          return (
-            <div key={q.id} className={`rounded-xl border p-4 space-y-3 ${correct ? "border-green-500/20 bg-green-500/5" : "border-red-500/20 bg-red-500/5"}`}>
-              <div className="flex items-start gap-3">
-                <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${correct ? "bg-green-500" : "bg-red-500"}`}>
-                  {correct ? Icon.check : Icon.x}
-                </div>
-                <p className="text-sm font-mono text-[#d4d4d8] leading-relaxed">{q.question}</p>
-              </div>
-              <div className="pl-8 space-y-1">
-                {selected[i] !== undefined && selected[i] !== q.correct && (
-                  <div className="flex gap-2 text-xs font-mono text-red-400">
-                    <span className="shrink-0">Your answer:</span>
-                    <span>{q.options[selected[i]]}</span>
-                  </div>
-                )}
-                <div className="flex gap-2 text-xs font-mono text-green-400">
-                  <span className="shrink-0">Correct:</span>
-                  <span>{q.options[q.correct]}</span>
-                </div>
-                <p className="text-xs text-[#71717a] mt-2 leading-relaxed">{q.explanation}</p>
-              </div>
+        <div className="bg-[#27272a] rounded-2xl p-6 border border-[#3f3f46] flex items-center gap-8">
+          <div className="text-center">
+            <div className="font-mono font-bold text-5xl" style={{ color: pct >= 80 ? "#22c55e" : pct >= 60 ? "#6366f1" : "#f59e0b" }}>{pct}%</div>
+            <div className="text-xs font-mono text-[#52525b] mt-1">Score</div>
+          </div>
+          <div className="flex-1">
+            <div className="h-2 bg-[#3f3f46] rounded-full overflow-hidden">
+              <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, backgroundColor: pct >= 80 ? "#22c55e" : pct >= 60 ? "#6366f1" : "#f59e0b" }} />
             </div>
-          );
-        })}
+            <p className="text-xs font-mono text-[#71717a] mt-2">{pct >= 80 ? "Excellent — keep it up!" : pct >= 60 ? "Good progress — review weak areas." : "Needs more practice."}</p>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider">Review</h3>
+          {questions.map((q, i) => {
+            const result = quizResults.results.find(r => r.questionId === q.id);
+            const correct = result?.isCorrect ?? false;
+            return (
+              <div key={q.id} className={`rounded-xl border p-4 space-y-3 ${correct ? "border-green-500/20 bg-green-500/5" : "border-red-500/20 bg-red-500/5"}`}>
+                <div className="flex items-start gap-3">
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${correct ? "bg-green-500" : "bg-red-500"}`}>
+                    {correct ? Icon.check : Icon.x}
+                  </div>
+                  <p className="text-sm font-mono text-[#d4d4d8] leading-relaxed">{q.question}</p>
+                </div>
+                <div className="pl-8 space-y-1">
+                  {!correct && selected[i] && (
+                    <div className="flex gap-2 text-xs font-mono text-red-400">
+                      <span className="shrink-0">Your answer:</span>
+                      <span>{selected[i]}</span>
+                    </div>
+                  )}
+                  <div className="flex gap-2 text-xs font-mono text-green-400">
+                    <span className="shrink-0">Correct:</span>
+                    <span>{q.correct_answer}</span>
+                  </div>
+                  {q.explanation && <p className="text-xs text-[#71717a] mt-2 leading-relaxed">{q.explanation}</p>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
+
+  return null;
 }
 
 function ProgressView() {
+  const [progress, setProgress] = useState<ApiProgress[]>([]);
+  const [attempts, setAttempts] = useState<ApiAttemptRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    Promise.all([fetchProgress(), fetchAttempts()])
+      .then(([p, a]) => { setProgress(p); setAttempts(a); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return <div className="p-8 text-sm font-mono text-[#52525b]">Loading progress...</div>;
+  }
+
   return (
     <div className="p-8 space-y-8">
       {/* Mastery rings */}
       <div>
         <h2 className="font-mono text-xs text-[#52525b] uppercase tracking-wider mb-5">Topic Mastery</h2>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {MOCK_PROGRESS.map(p => (
-            <div key={p.topic} className="bg-[#27272a] rounded-2xl p-5 border border-[#3f3f46] flex flex-col items-center gap-3">
-              <MasteryRing mastery={p.mastery} topic={p.topic} />
-              <div className="text-center space-y-1">
-                <div className="flex items-center gap-1.5 justify-center">
-                  <span className={`${p.trend === "up" ? "text-green-400" : p.trend === "down" ? "text-red-400" : "text-[#52525b]"}`}>
-                    {p.trend === "up" ? Icon.arrowUp : p.trend === "down" ? Icon.arrowDown : Icon.minus}
-                  </span>
-                  <span className="text-xs font-mono text-[#52525b]">{p.attempts} quizzes</span>
+        {progress.length === 0 ? (
+          <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-10 text-center">
+            <p className="text-sm text-[#71717a]">No progress data yet. Complete a quiz to start tracking mastery.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {progress.map(p => (
+              <div key={p.id} className="bg-[#27272a] rounded-2xl p-5 border border-[#3f3f46] flex flex-col items-center gap-3">
+                <MasteryRing mastery={Math.round(p.mastery_score)} topic={p.topics?.name ?? "Unknown"} />
+                <div className="text-center">
+                  <div className="text-xs font-mono text-[#3f3f46]">{dateStr(p.last_updated)}</div>
                 </div>
-                <div className="text-xs font-mono text-[#3f3f46]">{p.lastAttempt}</div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Weak areas */}
-      <div>
-        <h2 className="font-mono text-xs text-[#52525b] uppercase tracking-wider mb-3">Needs Attention</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {MOCK_PROGRESS.filter(p => p.mastery < 60).map(p => (
-            <div key={p.topic} className="bg-[#27272a] rounded-xl border border-yellow-500/20 p-4 flex items-center gap-4">
-              <div className="w-10 h-10 rounded-xl bg-yellow-500/10 flex items-center justify-center text-yellow-500 font-mono font-bold text-sm shrink-0">{p.mastery}</div>
-              <div className="flex-1 min-w-0">
-                <p className="font-mono text-sm text-[#f4f4f5] truncate">{p.topic}</p>
-                <div className="mt-1.5 h-1.5 bg-[#3f3f46] rounded-full overflow-hidden">
-                  <div className="h-full bg-yellow-500 rounded-full" style={{ width: `${p.mastery}%` }} />
+      {progress.filter(p => p.mastery_score < 60).length > 0 && (
+        <div>
+          <h2 className="font-mono text-xs text-[#52525b] uppercase tracking-wider mb-3">Needs Attention</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {progress.filter(p => p.mastery_score < 60).map(p => (
+              <div key={p.id} className="bg-[#27272a] rounded-xl border border-yellow-500/20 p-4 flex items-center gap-4">
+                <div className="w-10 h-10 rounded-xl bg-yellow-500/10 flex items-center justify-center text-yellow-500 font-mono font-bold text-sm shrink-0">{Math.round(p.mastery_score)}</div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-mono text-sm text-[#f4f4f5] truncate">{p.topics?.name ?? "Unknown"}</p>
+                  <div className="mt-1.5 h-1.5 bg-[#3f3f46] rounded-full overflow-hidden">
+                    <div className="h-full bg-yellow-500 rounded-full" style={{ width: `${p.mastery_score}%` }} />
+                  </div>
                 </div>
               </div>
-              <button className="text-xs font-mono text-indigo-400 hover:text-indigo-300 transition-colors shrink-0">Practice →</button>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Recent attempts table */}
+      {/* Recent attempts */}
       <div>
         <h2 className="font-mono text-xs text-[#52525b] uppercase tracking-wider mb-3">Recent Attempts</h2>
         <div className="rounded-xl overflow-hidden border border-[#3f3f46]">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[#3f3f46] bg-[#27272a]">
-                {["Date", "Topic", "Score", "Time", "Trend"].map(h => (
+                {["Date", "Quiz", "Score"].map(h => (
                   <th key={h} className="px-4 py-3 text-left font-mono text-xs text-[#52525b] uppercase tracking-wider">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {RECENT_ATTEMPTS.map((a, i) => {
-                const pct = Math.round((a.score / a.total) * 100);
+              {attempts.length === 0 ? (
+                <tr><td colSpan={3} className="px-4 py-6 text-center text-xs font-mono text-[#52525b]">No attempts yet.</td></tr>
+              ) : attempts.map((a, i) => {
+                const pct = Math.round(a.score);
                 return (
-                  <tr key={i} className={`border-b border-[#27272a] hover:bg-[#27272a] transition-colors duration-150 ${i === RECENT_ATTEMPTS.length - 1 ? "border-b-0" : ""}`}>
-                    <td className="px-4 py-3 font-mono text-xs text-[#52525b]">{a.date}</td>
+                  <tr key={a.id} className={`border-b border-[#27272a] hover:bg-[#27272a] transition-colors duration-150 ${i === attempts.length - 1 ? "border-b-0" : ""}`}>
+                    <td className="px-4 py-3 font-mono text-xs text-[#52525b]">{dateStr(a.created_at)}</td>
                     <td className="px-4 py-3">
-                      <span className="px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-mono">{a.topic}</span>
+                      <span className="px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-mono">{a.quizzes?.title ?? "Quiz"}</span>
                     </td>
                     <td className="px-4 py-3">
                       <span className={`font-mono font-semibold text-sm ${pct >= 80 ? "text-green-400" : pct >= 60 ? "text-indigo-400" : "text-yellow-400"}`}>
-                        {a.score}/{a.total}
+                        {Math.round(a.score)}%
                       </span>
-                      <span className="text-xs font-mono text-[#52525b] ml-1">({pct}%)</span>
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-[#71717a]">{a.time}</td>
-                    <td className="px-4 py-3">
-                      <div className="w-16 h-1.5 bg-[#3f3f46] rounded-full overflow-hidden">
-                        <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: pct >= 80 ? "#22c55e" : pct >= 60 ? "#6366f1" : "#f59e0b" }} />
-                      </div>
                     </td>
                   </tr>
                 );

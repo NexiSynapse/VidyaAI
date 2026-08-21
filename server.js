@@ -88,6 +88,23 @@ app.post('/api/ingest', upload.single('file'), async (req, res) => {
 
   try {
     const { documentId, topicId } = req.body;
+
+    // Create the document row if none provided (title = uploaded filename)
+    let docId = documentId;
+    if (!docId) {
+      const { data: doc, error: docErr } = await supabase
+        .from('documents')
+        .insert({
+          title: req.file.originalname || 'Untitled',
+          topic_id: topicId || null,
+          status: 'processed'
+        })
+        .select()
+        .single();
+      if (docErr) throw docErr;
+      docId = doc.id;
+    }
+
     const text = await extractText(req.file.path);
     const chunks = chunkText(text);
     const embeddings = await generateEmbeddings(chunks);
@@ -97,8 +114,8 @@ app.post('/api/ingest', upload.single('file'), async (req, res) => {
       .insert(chunks.map((chunk, i) => ({
         content: chunk,
         embedding: embeddings[i],
-        document_id: documentId,
-        topic_id: topicId, // Added topic_id support
+        document_id: docId,
+        topic_id: topicId,
       })));
 
     if (error) throw error;
@@ -106,7 +123,7 @@ app.post('/api/ingest', upload.single('file'), async (req, res) => {
     // Cleanup uploaded file
     await fs.unlink(req.file.path);
 
-    res.json({ success: true, chunksCount: chunks.length });
+    res.json({ success: true, documentId: docId, chunksCount: chunks.length });
   } catch (err) {
     console.error('Ingestion error:', err);
     res.status(500).json({ error: err.message });
@@ -215,6 +232,20 @@ app.post('/api/quizzes', async (req, res) => {
   }
 });
 
+// GET /api/quizzes: List all quizzes
+app.get('/api/quizzes', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('quizzes')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/quizzes/:id: Fetch a specific quiz and its questions
 app.get('/api/quizzes/:id', async (req, res) => {
   const { id } = req.params;
@@ -290,6 +321,23 @@ app.post('/api/quiz/submit', async (req, res) => {
   }
 });
 
+// GET /api/attempts/:userId: Fetch a user's recent quiz attempts
+app.get('/api/attempts/:userId', async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('quiz_attempts')
+      .select('*, quizzes(title, topic_id, topics(name))')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(10);
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/progress/:userId: Fetch user progress
 app.get('/api/progress/:userId', async (req, res) => {
   const { userId } = req.params;
@@ -348,4 +396,8 @@ app.post('/api/flashcards/review', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.listen(PORT, () => {
+  console.log(`VidyaAI server running on http://localhost:${PORT}`);
 });

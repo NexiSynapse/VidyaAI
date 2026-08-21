@@ -2,13 +2,21 @@
 -- Enable pgvector
 CREATE EXTENSION IF NOT EXISTS vector;
 
+-- 1. Topics Table (must be created first — referenced by documents, chunks, quizzes, etc.)
+CREATE TABLE IF NOT EXISTS topics (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Documents table (from P0)
 CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID,
     title TEXT NOT NULL,
     topic TEXT, -- Legacy text tag
-    topic_id UUID REFERENCES topics(id), -- New FK
+    topic_id UUID REFERENCES topics(id),
     storage_path TEXT,
     status TEXT DEFAULT 'processed',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -18,7 +26,7 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE TABLE IF NOT EXISTS chunks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     document_id UUID REFERENCES documents(id) ON DELETE CASCADE,
-    topic_id UUID REFERENCES topics(id), -- New: Topic filtering
+    topic_id UUID REFERENCES topics(id),
     content TEXT NOT NULL,
     embedding vector(1536),
     page INTEGER,
@@ -28,16 +36,6 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 -- Index for vector search
 CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-
--- P1: Topics, Quizzes, and Progress Schema
-
--- 1. Topics Table
-CREATE TABLE IF NOT EXISTS topics (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name TEXT NOT NULL,
-    description TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
 
 -- 2. Quizzes Table
 CREATE TABLE IF NOT EXISTS quizzes (
@@ -158,8 +156,7 @@ CREATE TABLE IF NOT EXISTS flashcards (
 );
 
 -- Index for fetching due flashcards
-CREATE INDEX IF NOT EXISTS idx_flashcards_due ON flashcards (user_id, next_review)
-WHERE next_review <= NOW();
+CREATE INDEX IF NOT EXISTS idx_flashcards_due ON flashcards (user_id, next_review);
 
 -- 9. Flashcard Reviews Table (for analytics/history)
 CREATE TABLE IF NOT EXISTS flashcard_reviews (
@@ -289,7 +286,6 @@ RETURNS TABLE (
     next_review TIMESTAMP WITH TIME ZONE,
     topic_name TEXT
 )
-LANGUAGE plpgsql
 AS $$
 BEGIN
     RETURN QUERY
