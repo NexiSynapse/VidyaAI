@@ -27,6 +27,10 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # Planning docs
 *[Pp]lan*
+
+# UI Schema docs
+UI_Schema*
