@@ -6,6 +6,7 @@ frontend/node_modules/
 # Old prototypes (all work integrated into root)
 vidya-ai/
 VidyaAI/
+prototype/
 
 # Environment variables (PRIVATE - do not commit)
 .env
