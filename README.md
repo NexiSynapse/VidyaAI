@@ -59,6 +59,7 @@ Server runs on `http://localhost:5000`.
 |---|---|---|
 | `/api/ingest` | POST | Upload a PDF → extract text → chunk → embed → store |
 | `/api/documents` | GET | List all documents |
+| `/api/documents/:id` | DELETE | Delete a document and its chunks |
 | `/api/topics` | GET | List all topics |
 | `/api/topics` | POST | Create a topic |
 | `/api/search` | POST | Semantic vector search over chunks (RAG retrieval) |

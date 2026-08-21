@@ -105,6 +105,10 @@ export async function fetchDocuments(): Promise<ApiDocument[]> {
   return request<ApiDocument[]>('/documents');
 }
 
+export async function deleteDocument(id: string): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>(`/documents/${id}`, { method: 'DELETE' });
+}
+
 export async function uploadDocument(file: File, topicId?: string): Promise<{ success: boolean; chunksCount: number }> {
   const formData = new FormData();
   formData.append('file', file);

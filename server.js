@@ -141,6 +141,20 @@ app.get('/api/documents', async (req, res) => {
   }
 });
 
+// DELETE /api/documents/:id: Delete a document and its chunks
+app.delete('/api/documents/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { error: chunkError } = await supabase.from('chunks').delete().eq('document_id', id);
+    if (chunkError) throw chunkError;
+    const { error: docError } = await supabase.from('documents').delete().eq('id', id);
+    if (docError) throw docError;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/topics: Fetch all topics
 app.get('/api/topics', async (req, res) => {
   try {
