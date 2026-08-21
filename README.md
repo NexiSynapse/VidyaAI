@@ -63,8 +63,10 @@ Server runs on `http://localhost:5000`.
 | `/api/topics` | POST | Create a topic |
 | `/api/search` | POST | Semantic vector search over chunks (RAG retrieval) |
 | `/api/quizzes` | POST | Create a quiz (with questions) |
+| `/api/quizzes` | GET | List all quizzes |
 | `/api/quizzes/:id` | GET | Fetch a quiz + its questions |
 | `/api/quiz/submit` | POST | Submit answers → grade → store attempt → update mastery |
+| `/api/attempts/:userId` | GET | Fetch a user's quiz attempt history |
 | `/api/progress/:userId` | GET | Fetch a user's mastery per topic |
 | `/api/flashcards/due` | GET | Fetch due flashcards for a user (SM-2 spaced repetition) |
 | `/api/flashcards/review` | POST | Submit a flashcard review → update SM-2 schedule → return next review date |
