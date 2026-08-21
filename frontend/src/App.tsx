@@ -972,7 +972,7 @@ function ProgressView() {
 
 function SettingsView() {
   return (
-    <div className="p-6 w-full max-w-xl space-y-8">
+    <div className="p-6 w-full space-y-8">
       <div>
         <h2 className="font-mono font-bold text-xl text-[#f4f4f5] mb-1">Settings</h2>
         <p className="text-sm text-[#71717a]">Configure your VidyaAI environment.</p>
@@ -1025,7 +1025,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   return (
-    <div className="size-full flex bg-[#18181b] text-[#f4f4f5] overflow-hidden" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
+    <div className="w-full h-screen flex bg-[#18181b] text-[#f4f4f5] overflow-hidden" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
       {/* Sidebar */}
       <aside
         className={`flex flex-col border-r border-[#27272a] bg-[#1c1c1f] transition-all duration-300 shrink-0 ${sidebarOpen ? "w-56" : "w-14"}`}
