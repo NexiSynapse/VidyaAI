@@ -1,5 +1,9 @@
 {
-  "description": "Create and preview interactive UI prototypes quickly to streamline design workflows and enhance project visualization for designers and teams.",
+  "title": "VidyaAI",
+  "description": "AI-powered study assistant. Upload your notes, ask questions, take quizzes, and track your progress.",
+  "icons": {
+    "icon": "/favicon.svg"
+  },
   "robots": {
     "index": false
   },

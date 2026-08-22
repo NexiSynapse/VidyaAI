@@ -83,6 +83,8 @@ export interface ApiFlashcard {
   repetitions: number;
   next_review: string;
   topic_name: string | null;
+  document_id?: string;
+  topic_id?: string;
 }
 
 const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
@@ -144,6 +146,45 @@ export async function searchChunks(query: string, documentId?: string): Promise<
   });
 }
 
+// Chat (RAG with Groq)
+export interface ApiChatResponse {
+  answer: string;
+  citations: { snippet: string; similarity: number }[];
+}
+
+export async function chatWithAI(query: string, documentId?: string): Promise<ApiChatResponse> {
+  return request<ApiChatResponse>('/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, documentId }),
+  });
+}
+
+// Voice
+export async function transcribeAudio(audioBlob: Blob): Promise<{ text: string }> {
+  const formData = new FormData();
+  formData.append('audio', audioBlob, 'recording.webm');
+  const res = await fetch(`${API_BASE}/stt`, { method: 'POST', body: formData });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Transcription failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function generateSpeech(text: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/tts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `TTS failed: ${res.status}`);
+  }
+  return res.blob();
+}
+
 // Quizzes
 export async function fetchQuizzes(): Promise<ApiQuiz[]> {
   return request<ApiQuiz[]>('/quizzes');
@@ -159,6 +200,15 @@ export async function createQuiz(documentId: string, title: string, questions: {
 
 export async function fetchQuiz(id: string): Promise<ApiQuiz> {
   return request<ApiQuiz>(`/quizzes/${id}`);
+}
+
+// Auto-generate quiz with Groq
+export async function generateQuiz(documentId: string, title?: string, questionCount?: number, topicId?: string): Promise<ApiQuiz> {
+  return request<ApiQuiz>('/quizzes/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ documentId, topicId, title: title || 'AI-Generated Quiz', questionCount: questionCount || 4 }),
+  });
 }
 
 export async function submitQuiz(quizId: string, answers: { questionId: string; answer: string }[]): Promise<ApiQuizAttempt> {
@@ -192,10 +242,25 @@ export async function reviewFlashcard(cardId: string, quality: number): Promise<
   });
 }
 
+// Auto-generate flashcards with Groq
+export async function generateFlashcards(documentId: string, count?: number, topicId?: string): Promise<{ flashcards: ApiFlashcard[]; count: number }> {
+  return request<{ flashcards: ApiFlashcard[]; count: number }>('/flashcards/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ documentId, topicId, count: count || 6, userId: DEMO_USER_ID }),
+  });
+}
+
 // Settings
 export interface ApiSettings {
   apiKey: string;
-  model: string;
+  groqApiKey: string;
+  groqKeySet: boolean;
+  groqKeyMasked: string;
+  groqModel: string;
+  googleApiKey: string;
+  googleKeySet: boolean;
+  googleKeyMasked: string;
   embeddingsModel: string;
   chunkSize: number;
   chunkOverlap: number;
@@ -213,4 +278,21 @@ export async function updateSettings(settings: Partial<ApiSettings>): Promise<{ 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),
   });
+}
+
+// Demo
+export interface DemoSeedStats {
+  topicsCount: number;
+  documentsCount: number;
+  chunksCount: number;
+  quizzesCount: number;
+  flashcardsCount: number;
+}
+
+export async function seedDemoData(): Promise<{ success: boolean; stats: DemoSeedStats }> {
+  return request<{ success: boolean; stats: DemoSeedStats }>('/demo/seed', { method: 'POST' });
+}
+
+export async function clearDemoData(): Promise<{ success: boolean }> {
+  return request<{ success: boolean }>('/demo/clear', { method: 'POST' });
 }

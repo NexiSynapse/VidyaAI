@@ -21,12 +21,13 @@
   "homepage": "https://github.com/NexiSynapse/VidyaAI#readme",
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
-    "axios": "^1.19.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "google-tts-api": "^2.0.2",
     "multer": "^2.2.0",
     "openai": "^7.5.0",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "pdfkit": "^0.19.1"
   }
 }

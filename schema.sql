@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     document_id UUID REFERENCES documents(id) ON DELETE CASCADE,
     topic_id UUID REFERENCES topics(id),
     content TEXT NOT NULL,
-    embedding vector(1536),
+    embedding vector(768),
     page INTEGER,
     section TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -99,7 +99,7 @@ $$ LANGUAGE plpgsql;
 
 -- 7. Vector Search Function (RPC for RAG)
 CREATE OR REPLACE FUNCTION match_chunks (
-    query_embedding vector(1536),
+    query_embedding vector(768),
     match_threshold float,
     match_count int,
     filter_document_id uuid DEFAULT NULL,
@@ -108,7 +108,7 @@ CREATE OR REPLACE FUNCTION match_chunks (
 RETURNS TABLE (
     id UUID,
     content TEXT,
-    embedding vector(1536),
+    embedding vector(768),
     document_id UUID,
     topic_id UUID,
     similarity FLOAT

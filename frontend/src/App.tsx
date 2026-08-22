@@ -1,18 +1,29 @@
 import { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { TopicGraph, TOPIC_NODES } from "./TopicGraph";
 import {
   fetchDocuments,
   uploadDocument,
   deleteDocument,
   fetchTopics,
   searchChunks,
+  chatWithAI,
   fetchQuizzes,
   fetchQuiz,
+  generateQuiz,
   submitQuiz,
   fetchProgress,
   fetchAttempts,
   fetchDueFlashcards,
+  generateFlashcards,
+  reviewFlashcard,
   fetchSettings,
   updateSettings,
+  seedDemoData,
+  clearDemoData,
+  transcribeAudio,
+  generateSpeech,
   type ApiDocument,
   type ApiTopic,
   type ApiQuiz,
@@ -24,7 +35,7 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type View = "dashboard" | "documents" | "chat" | "quiz" | "progress" | "settings";
+type View = "dashboard" | "documents" | "chat" | "quiz" | "flashcards" | "progress" | "settings";
 type QuizPhase = "list" | "taking" | "results";
 
 interface ChatMessage {
@@ -42,10 +53,10 @@ interface SelectedAnswers {
 // ─── Dummy Data ─────────────────────────────────────────────────────────────
 
 const ACTIVITY_FEED = [
-  { type: "quiz", text: "Scored 8/10 on Data Structures quiz", time: "2h ago", color: "text-green-400", dot: "bg-green-400" },
+  { type: "quiz", text: "Scored 80/100 on Data Structures quiz", time: "2h ago", color: "text-green-400", dot: "bg-green-400" },
   { type: "upload", text: "Uploaded os_memory_management.pdf", time: "4h ago", color: "text-indigo-400", dot: "bg-indigo-400" },
   { type: "chat", text: "Asked 6 questions in AI Teacher", time: "5h ago", color: "text-[#818cf8]", dot: "bg-[#818cf8]" },
-  { type: "quiz", text: "Scored 6/10 on Algorithms quiz", time: "Yesterday", color: "text-yellow-400", dot: "bg-yellow-400" },
+  { type: "quiz", text: "Scored 60/100 on Algorithms quiz", time: "Yesterday", color: "text-yellow-400", dot: "bg-yellow-400" },
   { type: "upload", text: "Uploaded dynamic_programming_notes.pdf", time: "Yesterday", color: "text-indigo-400", dot: "bg-indigo-400" },
   { type: "chat", text: "Started session on Binary Trees", time: "2 days ago", color: "text-[#818cf8]", dot: "bg-[#818cf8]" },
 ];
@@ -214,7 +225,7 @@ function MasteryRing({ mastery, topic }: { mastery: number; topic: string }) {
 
 // ─── Views ────────────────────────────────────────────────────────────────────
 
-function DashboardView({ navigate }: { navigate: (v: View) => void }) {
+function DashboardView({ navigate, quickPrompt, setQuickPrompt }: { navigate: (v: View) => void; quickPrompt: string; setQuickPrompt: (q: string) => void }) {
   const [docs, setDocs] = useState<ApiDocument[]>([]);
   const [progress, setProgress] = useState<ApiProgress[]>([]);
   const [dueCards, setDueCards] = useState<ApiFlashcard[]>([]);
@@ -227,10 +238,10 @@ function DashboardView({ navigate }: { navigate: (v: View) => void }) {
       .finally(() => setLoading(false));
   }, []);
 
+  const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const readyDocs = docs.filter(d => statusForDoc(d) === "ready").length;
   const avgMastery = progress.length ? Math.round(progress.reduce((a, p) => a + p.mastery_score, 0) / progress.length) : 0;
-
-  const [quickPrompt, setQuickPrompt] = useState("");
+  const selectedTopic = TOPIC_NODES.find(n => n.id === selectedTopicId) || null;
 
   if (loading) {
     return <div className="p-6 text-sm font-mono text-[#52525b]">Loading dashboard...</div>;
@@ -238,99 +249,246 @@ function DashboardView({ navigate }: { navigate: (v: View) => void }) {
 
   return (
     <div className="p-6 space-y-6">
-      {/* Welcome banner */}
-      <div className="rounded-2xl bg-gradient-to-br from-indigo-600/30 via-indigo-500/10 to-transparent border border-indigo-500/20 p-6 flex items-center gap-6">
-        <div className="flex-1 min-w-0">
-          <p className="font-mono text-xs text-indigo-400 uppercase tracking-widest mb-1">{new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}</p>
-          <h2 className="font-mono font-bold text-2xl text-[#f4f4f5] mb-1">Welcome back, Student</h2>
-          <p className="text-sm text-[#71717a]">{readyDocs} document{readyDocs !== 1 ? "s" : ""} ready, {dueCards.length} flashcard{dueCards.length !== 1 ? "s" : ""} due for review.</p>
+      {/* Command Header & Integrated Analytics Strip */}
+      <div className="bg-[#121215] border border-[#27272a] rounded-2xl p-6 shadow-sm">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-[#27272a]">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[11px] text-indigo-400 uppercase tracking-widest">// WORKSPACE DASHBOARD</span>
+              <span className="text-[10px] font-mono text-[#71717a]">•</span>
+              <span className="text-[11px] font-mono text-[#71717a]">{new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</span>
+            </div>
+            <h2 className="font-mono font-bold text-2xl text-[#f4f4f5] mt-1 tracking-tight">Study Command Center</h2>
+          </div>
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => navigate("chat")} 
+              className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-mono font-semibold transition-all duration-150 shadow-sm flex items-center gap-2"
+            >
+              {Icon.chat} Ask AI Teacher
+            </button>
+            <button 
+              onClick={() => navigate("quiz")} 
+              className="px-4 py-2.5 rounded-xl border border-[#3f3f46] hover:border-[#52525b] hover:bg-[#1c1c20] text-[#d4d4d8] text-xs font-mono transition-all duration-150 flex items-center gap-2"
+            >
+              {Icon.quiz} Practice Quiz
+            </button>
+          </div>
         </div>
-        <div className="hidden sm:flex flex-col gap-2 shrink-0">
-          <button onClick={() => navigate("chat")} className="px-4 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-mono font-semibold transition-colors duration-150 flex items-center gap-2">
-            {Icon.chat} Ask AI Teacher
+
+        {/* Integrated Metrics Ribbon */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-6">
+          <button onClick={() => navigate("documents")} className="text-left group p-2 rounded-xl hover:bg-[#18181c] transition-colors">
+            <span className="font-mono text-[10px] text-[#71717a] uppercase tracking-wider block mb-1">Active Documents</span>
+            <div className="flex items-baseline gap-2">
+              <span className="font-mono font-bold text-2xl text-[#f4f4f5] group-hover:text-indigo-400 transition-colors">{readyDocs}</span>
+              <span className="font-mono text-xs text-[#71717a]">/ {docs.length} total</span>
+            </div>
           </button>
-          <button onClick={() => navigate("quiz")} className="px-4 py-2.5 rounded-xl border border-[#3f3f46] hover:border-[#52525b] hover:bg-[#27272a] text-[#a1a1aa] text-xs font-mono transition-colors duration-150 flex items-center gap-2">
-            {Icon.quiz} Practice Quiz
+          <button onClick={() => navigate("progress")} className="text-left group p-2 rounded-xl hover:bg-[#18181c] transition-colors">
+            <span className="font-mono text-[10px] text-[#71717a] uppercase tracking-wider block mb-1">Avg Topic Mastery</span>
+            <div className="flex items-baseline gap-2">
+              <span className="font-mono font-bold text-2xl text-emerald-400">{avgMastery}%</span>
+              <span className="font-mono text-xs text-[#71717a]">across topics</span>
+            </div>
+          </button>
+          <button onClick={() => navigate("quiz")} className="text-left group p-2 rounded-xl hover:bg-[#18181c] transition-colors">
+            <span className="font-mono text-[10px] text-[#71717a] uppercase tracking-wider block mb-1">Quizzes Taken</span>
+            <div className="flex items-baseline gap-2">
+              <span className="font-mono font-bold text-2xl text-violet-400">{RECENT_ATTEMPTS.length}</span>
+              <span className="font-mono text-xs text-[#71717a]">completed</span>
+            </div>
+          </button>
+          <button onClick={() => navigate("progress")} className="text-left group p-2 rounded-xl hover:bg-[#18181c] transition-colors">
+            <span className="font-mono text-[10px] text-[#71717a] uppercase tracking-wider block mb-1">Weekly Questions</span>
+            <div className="flex items-baseline gap-2">
+              <span className="font-mono font-bold text-2xl text-amber-400">{WEEKLY_SESSIONS.reduce((a, d) => a + d.questions, 0)}</span>
+              <span className="font-mono text-xs text-[#71717a]">answered</span>
+            </div>
           </button>
         </div>
       </div>
 
-      {/* Stat tiles */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {[
-          { label: "Documents", value: readyDocs, sub: `${docs.length} total`, color: "text-indigo-400", bg: "bg-indigo-500/10", border: "border-indigo-500/20", onClick: () => navigate("documents") },
-          { label: "Avg Mastery", value: `${avgMastery}%`, sub: "across all topics", color: "text-green-400", bg: "bg-green-500/10", border: "border-green-500/20", onClick: () => navigate("progress") },
-          { label: "Quizzes Taken", value: RECENT_ATTEMPTS.length, sub: "this session", color: "text-[#818cf8]", bg: "bg-indigo-500/10", border: "border-indigo-500/20", onClick: () => navigate("quiz") },
-          { label: "This Week", value: WEEKLY_SESSIONS.reduce((a, d) => a + d.questions, 0), sub: "questions answered", color: "text-yellow-400", bg: "bg-yellow-500/10", border: "border-yellow-500/20", onClick: () => navigate("progress") },
-        ].map(tile => (
-          <button
-            key={tile.label}
-            onClick={tile.onClick}
-            className={`rounded-xl border ${tile.border} ${tile.bg} p-4 text-left hover:brightness-110 transition-all duration-150`}
-          >
-            <div className={`font-mono font-bold text-3xl ${tile.color}`}>{tile.value}</div>
-            <div className="font-mono text-xs text-[#f4f4f5] mt-1">{tile.label}</div>
-            <div className="font-mono text-[10px] text-[#52525b] mt-0.5">{tile.sub}</div>
-          </button>
-        ))}
+      {/* Weekly Sessions Chart (Precision Scientific Style) */}
+      <div className="bg-[#121215] border border-[#27272a] rounded-2xl p-6">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-0.5">// 01. ACTIVITY LOG</span>
+            <h3 className="font-mono text-sm font-semibold text-[#f4f4f5]">Weekly Session Velocity</h3>
+          </div>
+          <span className="text-xs font-mono text-[#71717a] bg-[#1a1a1e] border border-[#27272a] px-3 py-1 rounded-md">Aug 14 – Aug 20</span>
+        </div>
+
+        <div className="flex items-end gap-3 md:gap-6 h-48 pt-4">
+          {WEEKLY_SESSIONS.map(d => {
+            const maxSessions = Math.max(...WEEKLY_SESSIONS.map(x => x.sessions));
+            const heightPct = maxSessions > 0 ? (d.sessions / maxSessions) * 100 : 0;
+            const isToday = d.day === "Sun";
+            
+            return (
+              <div key={d.day} className="flex-1 flex flex-col items-center gap-2 group relative">
+                {/* Session count label above bar */}
+                <span className={`font-mono text-xs font-semibold ${isToday ? "text-cyan-400" : d.sessions > 0 ? "text-[#a1a1aa]" : "text-[#3f3f46]"}`}>
+                  {d.sessions}
+                </span>
+
+                {/* Outer Track & Inner Bar */}
+                <div className="relative w-full max-w-[56px] flex items-end justify-center bg-[#1a1a1e] rounded-t-lg border border-[#27272a] p-1" style={{ height: "140px" }}>
+                  <div
+                    className={`w-full rounded-t transition-all duration-300 ${
+                      isToday 
+                        ? "bg-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.4)]" 
+                        : d.sessions > 0 
+                        ? "bg-indigo-600 group-hover:bg-indigo-500" 
+                        : "bg-[#27272a]/50"
+                    }`}
+                    style={{ height: `${Math.max(heightPct, d.sessions > 0 ? 10 : 4)}%` }}
+                  />
+                </div>
+
+                {/* Day label */}
+                <span className={`font-mono text-xs ${isToday ? "text-cyan-400 font-bold" : "text-[#71717a]"}`}>
+                  {d.day}
+                </span>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
-      {/* Main grid */}
+      {/* Knowledge Map + right-column side-by-side */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-stretch">
+
+        {/* Knowledge Map — takes up the left 2 columns */}
+        <div className="lg:col-span-2 flex flex-col rounded-2xl border border-[#27272a] bg-[#121215] overflow-hidden min-w-0">
+          <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-[#27272a]">
+            <div>
+              <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-0.5">// 02. KNOWLEDGE GRAPH ENGINE</span>
+              <h3 className="font-mono font-semibold text-sm text-[#f4f4f5]">Interactive Topic Map</h3>
+            </div>
+            <button onClick={() => navigate("progress")} className="text-xs font-mono text-indigo-400 hover:text-indigo-300 transition-colors shrink-0 bg-[#1a1a1e] border border-[#27272a] px-3 py-1 rounded-md">Full tracker →</button>
+          </div>
+          <div className="flex-1 px-4 pb-4 flex flex-col min-h-[400px]">
+            <TopicGraph onSelect={id => setSelectedTopicId(prev => prev === id ? null : id)} />
+          </div>
+        </div>
+
+        {/* Right cards — stacked, 1 column */}
+        <div className="lg:col-span-1 flex flex-col gap-4 min-w-0">
+
+          {/* Suggested next */}
+          <div className="bg-[#121215] rounded-2xl border border-[#27272a] p-5 flex-1">
+            <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-0.5">// RECOMMENDED FOCUS</span>
+            <h3 className="font-mono text-xs font-semibold text-[#f4f4f5] mb-3">Suggested Next Steps</h3>
+            <div className="space-y-2.5">
+              {SUGGESTED_TOPICS.map((s, i) => (
+                <button
+                  key={i}
+                  onClick={() => navigate("chat")}
+                  className="w-full text-left p-3 rounded-xl border border-[#27272a] bg-[#1a1a1e]/60 hover:border-indigo-500/40 hover:bg-[#1a1a24] transition-all duration-150 group"
+                >
+                  <div className="flex items-start gap-2.5">
+                    <span className="w-5 h-5 rounded bg-indigo-500/10 text-indigo-400 flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-mono font-bold border border-indigo-500/20">{i + 1}</span>
+                    <div className="min-w-0">
+                      <p className="font-mono text-xs text-[#f4f4f5] font-semibold group-hover:text-indigo-300 transition-colors truncate">{s.topic}</p>
+                      <p className="text-[10px] font-mono text-[#71717a] mt-0.5 truncate">{s.reason}</p>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Recent docs */}
+          <div className="bg-[#121215] rounded-2xl border border-[#27272a] p-5 flex-1">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-0.5">// RECENT MATERIALS</span>
+                <h3 className="font-mono text-xs font-semibold text-[#f4f4f5]">Study Documents</h3>
+              </div>
+              <button onClick={() => navigate("documents")} className="text-xs font-mono text-indigo-400 hover:text-indigo-300 transition-colors">All →</button>
+            </div>
+            <div className="space-y-2">
+              {docs.length === 0 ? (
+                <p className="text-xs font-mono text-[#71717a]">No documents uploaded yet.</p>
+              ) : (
+                docs.slice(0, 3).map(d => (
+                  <div key={d.id} className="flex items-center justify-between p-2.5 rounded-xl border border-[#27272a] bg-[#1a1a1e]/60 hover:border-indigo-500/40 transition-all duration-150">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-7 h-7 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 shrink-0">
+                        {Icon.folder}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-mono text-xs text-[#f4f4f5] font-medium truncate">{d.title}</p>
+                        <p className="text-[10px] font-mono text-[#71717a] truncate">{d.topic ?? "General"}</p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shrink-0">
+                      Ready
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      {/* Bottom Row — Topic Mastery + Quick Ask + Activity */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
 
-        {/* Left col: mastery + weekly activity */}
+        {/* Left col: mastery + quick ask */}
         <div className="lg:col-span-2 space-y-5">
-          <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider">Topic Mastery</h3>
-              <button onClick={() => navigate("progress")} className="text-xs font-mono text-indigo-400 hover:text-indigo-300 transition-colors">View all →</button>
+
+          {/* Topic mastery bars */}
+          <div className="bg-[#121215] rounded-2xl border border-[#27272a] p-6">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-0.5">// 03. TOPIC PROFICIENCY</span>
+                <h3 className="font-mono text-sm font-semibold text-[#f4f4f5]">Subject Mastery Scores</h3>
+              </div>
+              <button onClick={() => navigate("progress")} className="text-xs font-mono text-indigo-400 hover:text-indigo-300 transition-colors bg-[#1a1a1e] border border-[#27272a] px-3 py-1 rounded-md">View all →</button>
             </div>
-            <div className="space-y-3">
+            <div className="space-y-4">
               {(progress.length > 0 ? progress : [
                 { id: "1", mastery_score: 82, topics: { name: "Data Structures" } },
                 { id: "2", mastery_score: 64, topics: { name: "Algorithms" } },
                 { id: "3", mastery_score: 31, topics: { name: "Operating Systems" } },
                 { id: "4", mastery_score: 55, topics: { name: "Networks" } },
               ]).map((p, idx) => {
-                const color = p.mastery_score >= 75 ? "#22c55e" : p.mastery_score >= 50 ? "#6366f1" : p.mastery_score >= 30 ? "#f59e0b" : "#ef4444";
+                const isHigh = p.mastery_score >= 75;
+                const isMid = p.mastery_score >= 50;
+                const isLow = p.mastery_score >= 30;
+
+                const barColor = isHigh ? "bg-emerald-500" : isMid ? "bg-indigo-500" : isLow ? "bg-amber-500" : "bg-rose-500";
+                const colorText = isHigh ? "text-emerald-400" : isMid ? "text-indigo-400" : isLow ? "text-amber-400" : "text-rose-400";
                 const trends = ["up", "up", "flat", "down"];
                 const trend = trends[idx % trends.length];
-                return (
-                  <div key={p.id} className="flex items-center gap-3">
-                    <span className="font-mono text-xs text-[#a1a1aa] w-36 truncate shrink-0">{p.topics?.name ?? "Unknown"}</span>
-                    <div className="flex-1 h-2 bg-[#3f3f46] rounded-full overflow-hidden">
-                      <div className="h-full rounded-full transition-all duration-700" style={{ width: `${p.mastery_score}%`, backgroundColor: color }} />
-                    </div>
-                    <span className="font-mono text-xs w-8 text-right shrink-0" style={{ color }}>{Math.round(p.mastery_score)}</span>
-                    <span className={`shrink-0 ${trend === "up" ? "text-green-400" : trend === "down" ? "text-red-400" : "text-[#52525b]"}`}>
-                      {trend === "up" ? "↑" : trend === "down" ? "↓" : "–"}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
 
-          {/* Weekly activity chart */}
-          <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-5">
-            <div className="flex items-center justify-between mb-5">
-              <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider">Weekly Sessions</h3>
-              <span className="text-xs font-mono text-[#52525b]">Aug 14 – 20</span>
-            </div>
-            <div className="flex items-end gap-3 h-24">
-              {WEEKLY_SESSIONS.map(d => {
-                const maxSessions = Math.max(...WEEKLY_SESSIONS.map(x => x.sessions));
-                const height = maxSessions > 0 ? (d.sessions / maxSessions) * 100 : 0;
-                const isToday = d.day === "Sun";
                 return (
-                  <div key={d.day} className="flex-1 flex flex-col items-center gap-2 group">
-                    <div className="relative w-full flex items-end justify-center" style={{ height: "80px" }}>
-                      <div
-                        className={`w-full rounded-t-md transition-all duration-500 ${isToday ? "bg-indigo-500" : "bg-[#3f3f46] group-hover:bg-indigo-500/50"}`}
-                        style={{ height: `${Math.max(height, d.sessions > 0 ? 8 : 3)}%` }}
+                  <div key={p.id} className="space-y-1.5 group">
+                    <div className="flex items-center justify-between text-xs font-mono">
+                      <span className="text-[#f4f4f5] font-medium group-hover:text-indigo-300 transition-colors">{p.topics?.name ?? "Unknown"}</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`font-bold ${colorText}`}>{Math.round(p.mastery_score)}/100</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                          trend === "up" 
+                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" 
+                            : trend === "down" 
+                            ? "bg-rose-500/10 text-rose-400 border border-rose-500/20" 
+                            : "bg-[#1a1a1e] text-[#71717a] border border-[#27272a]"
+                        }`}>
+                          {trend === "up" ? "↑ +4%" : trend === "down" ? "↓ -2%" : "–"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="h-2 bg-[#1a1a1e] rounded-full overflow-hidden border border-[#27272a]">
+                      <div 
+                        className={`h-full rounded-full ${barColor} transition-all duration-700 ease-out`} 
+                        style={{ width: `${p.mastery_score}%` }} 
                       />
                     </div>
-                    <span className={`font-mono text-[10px] ${isToday ? "text-indigo-400" : "text-[#52525b]"}`}>{d.day}</span>
                   </div>
                 );
               })}
@@ -338,19 +496,20 @@ function DashboardView({ navigate }: { navigate: (v: View) => void }) {
           </div>
 
           {/* Quick ask */}
-          <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-5">
-            <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider mb-3">Quick Ask</h3>
+          <div className="bg-[#121215] rounded-2xl border border-[#27272a] p-6">
+            <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-0.5">// AI ASSISTANT INTERFACE</span>
+            <h3 className="font-mono text-sm font-semibold text-[#f4f4f5] mb-3">Quick Question Trigger</h3>
             <div className="flex gap-3">
               <input
                 value={quickPrompt}
                 onChange={e => setQuickPrompt(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && quickPrompt.trim()) { navigate("chat"); } }}
-                placeholder="Ask your AI teacher anything..."
-                className="flex-1 bg-[#1c1c1f] border border-[#3f3f46] rounded-xl px-4 py-3 text-sm text-[#f4f4f5] placeholder:text-[#52525b] focus:outline-none focus:border-indigo-500 font-sans transition-colors duration-150"
+                placeholder="Ask your AI teacher a question about your topics..."
+                className="flex-1 bg-[#1a1a1e] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-[#f4f4f5] placeholder:text-[#52525b] focus:outline-none focus:border-indigo-500 font-sans transition-colors duration-150"
               />
               <button
                 onClick={() => { if (quickPrompt.trim()) navigate("chat"); }}
-                className="px-4 py-3 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-sm transition-colors duration-150"
+                className="px-5 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-all duration-150 flex items-center gap-2 shrink-0"
               >
                 {Icon.send}
               </button>
@@ -360,7 +519,7 @@ function DashboardView({ navigate }: { navigate: (v: View) => void }) {
                 <button
                   key={q}
                   onClick={() => { setQuickPrompt(q); navigate("chat"); }}
-                  className="px-2.5 py-1 rounded-lg bg-[#1c1c1f] border border-[#3f3f46] text-xs font-mono text-[#71717a] hover:text-[#f4f4f5] hover:border-[#52525b] transition-colors duration-150"
+                  className="px-3 py-1.5 rounded-lg bg-[#1a1a1e] border border-[#27272a] text-xs font-mono text-[#a1a1aa] hover:text-[#f4f4f5] hover:border-[#3f3f46] transition-colors duration-150"
                 >
                   {q}
                 </button>
@@ -369,70 +528,20 @@ function DashboardView({ navigate }: { navigate: (v: View) => void }) {
           </div>
         </div>
 
-        {/* Right col: activity feed + suggestions */}
+        {/* Right col: activity feed */}
         <div className="space-y-5">
-
-          {/* Suggested next */}
-          <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-5">
-            <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider mb-4">Suggested Next</h3>
-            <div className="space-y-3">
-              {SUGGESTED_TOPICS.map((s, i) => (
-                <button
-                  key={i}
-                  onClick={() => navigate("chat")}
-                  className="w-full text-left p-3 rounded-xl border border-[#3f3f46] hover:border-indigo-500/40 hover:bg-indigo-500/5 transition-all duration-150 group"
-                >
-                  <div className="flex items-start gap-2">
-                    <span className="w-5 h-5 rounded-md bg-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-mono font-bold">{i + 1}</span>
-                    <div className="min-w-0">
-                      <p className="font-mono text-xs text-[#d4d4d8] font-semibold group-hover:text-indigo-300 transition-colors truncate">{s.topic}</p>
-                      <p className="text-[10px] text-[#52525b] mt-0.5 truncate">{s.reason}</p>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Recent docs */}
-          <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider">Recent Files</h3>
-              <button onClick={() => navigate("documents")} className="text-xs font-mono text-indigo-400 hover:text-indigo-300 transition-colors">All →</button>
-            </div>
-            <div className="space-y-2">
-              {docs.length === 0 ? (
-                <p className="text-xs font-mono text-[#52525b]">No documents yet. Upload a PDF to get started.</p>
-              ) : docs.slice(0, 4).map(doc => (
-                <button
-                  key={doc.id}
-                  onClick={() => navigate("documents")}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[#3f3f46] transition-colors duration-150 text-left group"
-                >
-                  <div className="w-7 h-7 rounded-md bg-[#3f3f46] flex items-center justify-center text-[#71717a] shrink-0">
-                    <svg width="12" height="12" fill="currentColor" viewBox="0 0 24 24"><path d="M5.625 1.5c-1.036 0-1.875.84-1.875 1.875v17.25c0 1.035.84 1.875 1.875 1.875h12.75c1.035 0 1.875-.84 1.875-1.875V12.75A3.75 3.75 0 0016.5 9h-1.875a1.875 1.875 0 01-1.875-1.875V5.25A3.75 3.75 0 009 1.5H5.625z"/><path d="M12.971 1.816A5.23 5.23 0 0114.25 5.25v1.875c0 .207.168.375.375.375H16.5a5.23 5.23 0 013.434 1.279 9.768 9.768 0 00-6.963-6.963z"/></svg>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-mono text-xs text-[#d4d4d8] truncate group-hover:text-[#f4f4f5]">{doc.title}</p>
-                    <p className="font-mono text-[10px] text-[#52525b]">{doc.topic || "Untagged"}</p>
-                  </div>
-                  <StatusBadge status={statusForDoc(doc)} />
-                </button>
-              ))}
-            </div>
-          </div>
-
           {/* Activity feed */}
-          <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-5">
-            <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider mb-4">Activity</h3>
+          <div className="bg-[#121215] rounded-2xl border border-[#27272a] p-6">
+            <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-0.5">// 04. EVENT LOG</span>
+            <h3 className="font-mono text-sm font-semibold text-[#f4f4f5] mb-4">Recent Activity</h3>
             <div className="relative">
-              <div className="absolute left-[5px] top-0 bottom-0 w-px bg-[#3f3f46]" />
+              <div className="absolute left-[5px] top-1 bottom-1 w-px bg-[#27272a]" />
               <div className="space-y-4 pl-5">
                 {ACTIVITY_FEED.map((a, i) => (
-                  <div key={i} className="relative">
-                    <div className={`absolute -left-5 top-1.5 w-2.5 h-2.5 rounded-full ${a.dot} ring-2 ring-[#27272a]`} />
+                  <div key={i} className="relative group">
+                    <div className={`absolute -left-5 top-1.5 w-2.5 h-2.5 rounded-full ${a.dot} ring-4 ring-[#121215]`} />
                     <p className={`text-xs font-mono ${a.color} leading-snug`}>{a.text}</p>
-                    <p className="text-[10px] font-mono text-[#3f3f46] mt-0.5">{a.time}</p>
+                    <p className="text-[10px] font-mono text-[#52525b] mt-0.5">{a.time}</p>
                   </div>
                 ))}
               </div>
@@ -444,7 +553,10 @@ function DashboardView({ navigate }: { navigate: (v: View) => void }) {
   );
 }
 
-function DocumentsView() {
+type DocFilter = "all" | "ready" | "processing" | "error";
+type DocSort = "topic" | "date" | "name";
+
+function DocumentsView({ uploadTrigger }: { uploadTrigger?: number }) {
   const [dragging, setDragging] = useState(false);
   const [docs, setDocs] = useState<ApiDocument[]>([]);
   const [topics, setTopics] = useState<ApiTopic[]>([]);
@@ -452,7 +564,14 @@ function DocumentsView() {
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [filter, setFilter] = useState<DocFilter>("all");
+  const [sortBy, setSortBy] = useState<DocSort>("date");
+  const [topicFilter, setTopicFilter] = useState<string>("all");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (uploadTrigger && uploadTrigger > 0) fileInputRef.current?.click();
+  }, [uploadTrigger]);
 
   function loadDocs() {
     fetchDocuments().then(setDocs).catch(e => setError(e.message)).finally(() => setLoading(false));
@@ -462,6 +581,26 @@ function DocumentsView() {
     loadDocs();
     fetchTopics().then(setTopics).catch(() => {});
   }, []);
+
+  // Derive unique topics from docs for the filter dropdown
+  const docTopics = Array.from(new Set(docs.map(d => d.topic).filter(Boolean))) as string[];
+
+  const filteredDocs = docs
+    .filter(d => filter === "all" || statusForDoc(d) === filter)
+    .filter(d => topicFilter === "all" || d.topic === topicFilter)
+    .sort((a, b) => {
+      if (sortBy === "topic") return (a.topic ?? "").localeCompare(b.topic ?? "");
+      if (sortBy === "name") return a.title.localeCompare(b.title);
+      // date (default): newest first
+      return new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime();
+    });
+
+  const stats = {
+    total: docs.length,
+    ready: docs.filter(d => statusForDoc(d) === "ready").length,
+    processing: docs.filter(d => statusForDoc(d) === "processing").length,
+    error: docs.filter(d => statusForDoc(d) === "error").length,
+  };
 
   async function handleFile(file: File) {
     setUploading(true);
@@ -506,7 +645,9 @@ function DocumentsView() {
   return (
     <div className="p-8 space-y-6">
       {error && (
-        <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm font-mono text-red-400">{error}</div>
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm font-mono text-rose-400 flex items-center gap-2">
+          <span>⚠️</span> {error}
+        </div>
       )}
 
       {/* Upload zone */}
@@ -515,72 +656,145 @@ function DocumentsView() {
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
         onClick={() => fileInputRef.current?.click()}
-        className={`relative border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all duration-200 select-none
-          ${dragging ? "border-indigo-400 bg-indigo-500/10" : "border-[#3f3f46] hover:border-[#6366f1]/60 hover:bg-[#27272a]"}`}
+        className={`relative border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-all duration-200 select-none bg-[#121215]
+          ${dragging ? "border-indigo-400 bg-indigo-500/10 shadow-[0_0_25px_rgba(99,102,241,0.2)]" : "border-[#27272a] hover:border-indigo-500/40 hover:bg-[#16161a]"}`}
       >
         <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md" className="hidden" onChange={handleFileInput} />
         <div className="flex flex-col items-center gap-3">
-          <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-colors duration-200 ${dragging ? "bg-indigo-500/20 text-indigo-400" : "bg-[#3f3f46] text-[#a1a1aa]"}`}>
+          <div className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-200 border ${dragging ? "bg-indigo-500/20 text-indigo-400 border-indigo-500/40" : "bg-[#1a1a1e] text-[#a1a1aa] border-[#27272a]"}`}>
             <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
             </svg>
           </div>
           <div>
-            <p className="font-mono font-semibold text-sm text-[#f4f4f5]">
-              {uploading ? "Uploading & indexing..." : "Drop PDF or click to upload"}
+            <p className="font-mono font-bold text-sm text-[#f4f4f5]">
+              {uploading ? "Uploading & vector indexing..." : "Drop PDF / Text file or click to upload"}
             </p>
-            <p className="text-xs text-[#71717a] mt-1">Supports .pdf, .txt, .md — text-based only</p>
+            <p className="text-xs font-mono text-[#71717a] mt-1">Supports PDF, TXT, MD — automated chunk extraction</p>
           </div>
         </div>
         {topics.length > 0 && (
           <div className="mt-4 flex items-center justify-center gap-3" onClick={e => e.stopPropagation()}>
-            <span className="text-xs font-mono text-[#52525b]">Topic:</span>
+            <span className="text-xs font-mono text-[#71717a]">Target Topic:</span>
             <select
               value={selectedTopic}
               onChange={e => setSelectedTopic(e.target.value)}
-              className="bg-[#27272a] border border-[#3f3f46] rounded-lg px-3 py-1.5 text-xs font-mono text-[#c7d2fe] focus:outline-none focus:border-indigo-500"
+              className="bg-[#1a1a1e] border border-[#27272a] rounded-lg px-3 py-1.5 text-xs font-mono text-indigo-300 focus:outline-none focus:border-indigo-500"
             >
-              <option value="">None</option>
+              <option value="">None (Auto-classify)</option>
               {topics.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
           </div>
         )}
       </div>
 
-      {/* Documents table */}
-      <div className="rounded-xl overflow-hidden border border-[#3f3f46]">
-        <div className="px-4 py-3 bg-[#27272a] border-b border-[#3f3f46] flex items-center justify-between">
-          <span className="font-mono text-xs text-[#a1a1aa] uppercase tracking-wider">Documents — {docs.length} files</span>
+      {/* Stats + filter/sort bar */}
+      <div className="flex flex-wrap items-center justify-between gap-4 bg-[#121215] border border-[#27272a] p-4 rounded-2xl">
+        {/* Stat counters */}
+        <div className="flex items-center gap-6">
+          {[
+            { label: "Total Files", value: stats.total, color: "text-[#f4f4f5]" },
+            { label: "Indexed", value: stats.ready, color: "text-emerald-400" },
+            { label: "Processing", value: stats.processing, color: "text-amber-400" },
+          ].map(s => (
+            <div key={s.label} className="flex items-baseline gap-2">
+              <span className={`font-mono font-bold text-lg ${s.color}`}>{s.value}</span>
+              <span className="font-mono text-[10px] text-[#71717a] uppercase tracking-wider">{s.label}</span>
+            </div>
+          ))}
         </div>
-        {docs.length === 0 ? (
-          <div className="p-8 text-center text-sm font-mono text-[#52525b]">No documents yet. Upload a PDF to get started.</div>
+
+        {/* Filters + sort */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Topic filter */}
+          <select
+            value={topicFilter}
+            onChange={e => setTopicFilter(e.target.value)}
+            className="bg-[#1a1a1e] border border-[#27272a] rounded-xl px-3 py-1.5 text-xs font-mono text-[#a1a1aa] focus:outline-none focus:border-indigo-500 cursor-pointer"
+          >
+            <option value="all">All Topics</option>
+            {docTopics.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+
+          {/* Status filter pills */}
+          <div className="flex gap-1 bg-[#1a1a1e] p-1 rounded-xl border border-[#27272a]">
+            {(["all", "ready", "processing", "error"] as DocFilter[]).map(f => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`px-3 py-1 rounded-lg text-xs font-mono capitalize transition-all duration-150 ${
+                  filter === f
+                    ? "bg-indigo-600/20 text-indigo-300 font-semibold border border-indigo-500/30"
+                    : "text-[#71717a] hover:text-[#d4d4d8]"
+                }`}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
+
+          {/* Sort buttons */}
+          <div className="flex gap-1 border-l border-[#27272a] pl-3">
+            {(["date", "topic", "name"] as DocSort[]).map(s => (
+              <button
+                key={s}
+                onClick={() => setSortBy(s)}
+                className={`px-2.5 py-1 rounded-lg text-xs font-mono capitalize transition-all duration-150 ${
+                  sortBy === s
+                    ? "bg-[#27272a] text-[#f4f4f5]"
+                    : "text-[#71717a] hover:text-[#a1a1aa]"
+                }`}
+              >
+                {s === "date" ? "↓ Date" : s === "topic" ? "Topic" : "A–Z"}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Documents table */}
+      <div className="rounded-2xl overflow-hidden border border-[#27272a] bg-[#121215]">
+        <div className="px-5 py-3.5 bg-[#121215] border-b border-[#27272a] flex items-center justify-between">
+          <span className="font-mono text-xs text-[#a1a1aa] uppercase tracking-widest">
+            // INDEXED REPOSITORY ({filteredDocs.length} {filteredDocs.length === 1 ? "FILE" : "FILES"})
+          </span>
+        </div>
+        {filteredDocs.length === 0 ? (
+          <div className="p-12 text-center text-xs font-mono text-[#71717a]">
+            {docs.length === 0 ? "No documents uploaded yet. Drop a PDF to begin indexing." : `No ${filter} documents match filter.`}
+          </div>
         ) : (
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-[#3f3f46]">
-                {["File", "Topic", "Added", "Status", ""].map(h => (
-                  <th key={h} className="px-4 py-3 text-left font-mono text-xs text-[#52525b] uppercase tracking-wider">{h}</th>
+              <tr className="border-b border-[#27272a] bg-[#1a1a1e]/40">
+                {["File", "Topic Tag", "Added Date", "Vector Status", ""].map(h => (
+                  <th key={h} className="px-5 py-3 text-left font-mono text-[10px] text-[#71717a] uppercase tracking-widest">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {docs.map((doc, i) => (
+              {filteredDocs.map((doc, i) => (
                 <tr
                   key={doc.id}
-                  className={`border-b border-[#27272a] hover:bg-[#27272a] transition-colors duration-150 cursor-pointer ${i === docs.length - 1 ? "border-b-0" : ""}`}
+                  className={`border-b border-[#27272a]/60 hover:bg-[#1a1a24]/50 transition-colors duration-150 cursor-pointer ${i === filteredDocs.length - 1 ? "border-b-0" : ""}`}
                 >
-                  <td className="px-4 py-3">
-                    <span className="font-mono text-xs text-[#c7d2fe]">{doc.title}</span>
+                  <td className="px-5 py-3.5">
+                    <div className="flex items-center gap-3">
+                      <div className="w-7 h-7 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 shrink-0">
+                        {Icon.folder}
+                      </div>
+                      <span className="font-mono text-xs text-[#f4f4f5] font-medium">{doc.title}</span>
+                    </div>
                   </td>
-                  <td className="px-4 py-3">
-                    <span className="px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-mono">{doc.topic || "Untagged"}</span>
+                  <td className="px-5 py-3.5">
+                    <span className="px-2.5 py-1 rounded-md bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-mono">{doc.topic || "Untagged"}</span>
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs text-[#52525b]">{dateStr(doc.created_at)}</td>
-                  <td className="px-4 py-3"><StatusBadge status={statusForDoc(doc)} /></td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-5 py-3.5 font-mono text-xs text-[#71717a]">{dateStr(doc.created_at)}</td>
+                  <td className="px-5 py-3.5"><StatusBadge status={statusForDoc(doc)} /></td>
+                  <td className="px-5 py-3.5 text-right">
                     <button
                       onClick={(e) => { e.stopPropagation(); handleDelete(doc.id); }}
-                      className="text-[#52525b] hover:text-red-400 transition-colors"
+                      className="text-[#71717a] hover:text-rose-400 p-1 rounded hover:bg-rose-500/10 transition-colors"
                       title="Delete document"
                     >
                       <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
@@ -598,14 +812,20 @@ function DocumentsView() {
   );
 }
 
-function ChatView() {
+function ChatView({ quickPrompt, clearQuickPrompt }: { quickPrompt: string; clearQuickPrompt: () => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [docs, setDocs] = useState<ApiDocument[]>([]);
   const [selectedDoc, setSelectedDoc] = useState("");
   const [expandedCitations, setExpandedCitations] = useState<Set<string>>(new Set());
   const [typing, setTyping] = useState(false);
+  const [isVoiceMode, setIsVoiceMode] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const didAutoSend = useRef(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<BlobPart[]>([]);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     fetchDocuments().then(d => {
@@ -614,6 +834,17 @@ function ChatView() {
       if (ready.length > 0 && !selectedDoc) setSelectedDoc(ready[0].id);
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (quickPrompt && !didAutoSend.current) {
+      didAutoSend.current = true;
+      setInput(quickPrompt);
+      setTimeout(() => {
+        sendMessageDirect(quickPrompt);
+        clearQuickPrompt();
+      }, 0);
+    }
+  }, [quickPrompt]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -627,8 +858,55 @@ function ChatView() {
     });
   }
 
-  async function sendMessage() {
-    const q = input.trim();
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorderRef.current = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      
+      mediaRecorderRef.current.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      
+      mediaRecorderRef.current.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        stream.getTracks().forEach(t => t.stop());
+        
+        setTyping(true);
+        try {
+          const { text } = await transcribeAudio(audioBlob);
+          if (text.trim()) {
+            await sendMessageDirect(text, true);
+          }
+        } catch (e) {
+          console.error("STT failed", e);
+          setMessages(prev => [...prev, { id: `e${Date.now()}`, role: "ai", content: "Sorry, I couldn't hear that properly.", timestamp: now() }]);
+        } finally {
+          setTyping(false);
+        }
+      };
+      
+      mediaRecorderRef.current.start();
+      setIsRecording(true);
+    } catch (e) {
+      console.error("Microphone error", e);
+      alert("Microphone access is required for voice chat.");
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  }
+
+  async function sendMessageDirect(q: string, playVoice = false) {
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+    
     if (!q) return;
     const userMsg: ChatMessage = { id: `u${Date.now()}`, role: "user", content: q, timestamp: now() };
     setMessages(prev => [...prev, userMsg]);
@@ -636,29 +914,39 @@ function ChatView() {
     setTyping(true);
 
     try {
-      const { chunks } = await searchChunks(q, selectedDoc || undefined);
-      const citations = chunks.slice(0, 3).map(c => ({
-        snippet: c.content.slice(0, 200) + (c.content.length > 200 ? "..." : ""),
+      const { answer, citations } = await chatWithAI(q, selectedDoc || undefined);
+      const mappedCitations = citations.map(c => ({
+        snippet: c.snippet,
         page: null,
       }));
 
-      let aiContent: string;
-      if (chunks.length === 0) {
-        aiContent = "I couldn't find relevant material in your uploaded documents for this question. Try uploading notes on this topic, or rephrase your question.";
-      } else {
-        aiContent = `Based on your course material, here's what I found:\n\n${citations.map((c, i) => `**[${i + 1}]** "${c.snippet}"`).join("\n\n")}\n\nWould you like me to explain any of these concepts in more detail?`;
-      }
-
       const aiMsg: ChatMessage = {
-        id: `a${Date.now()}`, role: "ai", content: aiContent,
-        citations: citations.length > 0 ? citations : undefined,
+        id: `a${Date.now()}`, role: "ai", content: answer,
+        citations: mappedCitations.length > 0 ? mappedCitations : undefined,
         timestamp: now(),
       };
       setMessages(prev => [...prev, aiMsg]);
+
+      if (playVoice) {
+        try {
+          const audioBlob = await generateSpeech(answer);
+          const url = URL.createObjectURL(audioBlob);
+          const audio = new Audio(url);
+          const existingAudio = currentAudioRef.current as HTMLAudioElement | null;
+          if (existingAudio) {
+            existingAudio.pause();
+          }
+          currentAudioRef.current = audio;
+          
+          audio.play();
+        } catch (e) {
+          console.error("TTS failed", e);
+        }
+      }
     } catch {
       setMessages(prev => [...prev, {
         id: `e${Date.now()}`, role: "ai",
-        content: "Sorry, something went wrong while searching your documents. Please try again.",
+        content: "Sorry, something went wrong. Please check your Groq API key in Settings and try again.",
         timestamp: now(),
       }]);
     } finally {
@@ -666,92 +954,152 @@ function ChatView() {
     }
   }
 
+  async function sendMessage() {
+    const q = input.trim();
+    if (!q) return;
+    setInput("");
+    await sendMessageDirect(q);
+  }
+
   function renderContent(content: string) {
-    return content.split("\n").map((line, i) => {
-      const parts = line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
-      return (
-        <span key={i}>
-          {parts.map((part, j) => {
-            if (part.startsWith("**") && part.endsWith("**")) return <strong key={j} className="font-semibold text-[#f4f4f5]">{part.slice(2, -2)}</strong>;
-            if (part.startsWith("`") && part.endsWith("`")) return <code key={j} className="px-1.5 py-0.5 rounded bg-[#3f3f46] font-mono text-xs text-[#c7d2fe]">{part.slice(1, -1)}</code>;
-            return <span key={j}>{part}</span>;
-          })}
-          {i < content.split("\n").length - 1 && <br />}
-        </span>
-      );
-    });
+    return (
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          table: ({ children }) => (
+            <div className="my-3 overflow-x-auto rounded-xl border border-[#27272a] bg-[#121215] shadow-sm">
+              <table className="w-full text-xs text-left font-mono border-collapse">
+                {children}
+              </table>
+            </div>
+          ),
+          thead: ({ children }) => (
+            <thead className="bg-[#1a1a1e] border-b border-[#27272a]">
+              {children}
+            </thead>
+          ),
+          tbody: ({ children }) => (
+            <tbody className="divide-y divide-[#27272a]/60">
+              {children}
+            </tbody>
+          ),
+          tr: ({ children }) => (
+            <tr className="hover:bg-[#1a1a24]/50 transition-colors">
+              {children}
+            </tr>
+          ),
+          th: ({ children }) => (
+            <th className="px-4 py-2.5 font-mono text-[11px] text-indigo-300 font-bold uppercase tracking-wider">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => (
+            <td className="px-4 py-2.5 text-[#e4e4e7] leading-relaxed font-mono">
+              {children}
+            </td>
+          ),
+          p: ({ children }) => <p className="mb-2.5 last:mb-0 leading-relaxed">{children}</p>,
+          ul: ({ children }) => <ul className="list-disc list-inside my-2 space-y-1 text-[#e4e4e7]">{children}</ul>,
+          ol: ({ children }) => <ol className="list-decimal list-inside my-2 space-y-1 text-[#e4e4e7]">{children}</ol>,
+          li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+          h1: ({ children }) => <h1 className="text-base font-bold font-mono text-[#f4f4f5] mt-4 mb-2">{children}</h1>,
+          h2: ({ children }) => <h2 className="text-sm font-bold font-mono text-[#f4f4f5] mt-3 mb-1.5">{children}</h2>,
+          h3: ({ children }) => <h3 className="text-xs font-bold font-mono text-indigo-300 mt-2 mb-1">{children}</h3>,
+          strong: ({ children }) => <strong className="font-semibold text-[#f4f4f5]">{children}</strong>,
+          em: ({ children }) => <em className="italic text-indigo-200">{children}</em>,
+          code: ({ inline, className, children, ...props }: any) => {
+            if (inline) {
+              return <code className="px-1.5 py-0.5 rounded bg-[#1a1a1e] border border-[#27272a] font-mono text-xs text-indigo-300" {...props}>{children}</code>;
+            }
+            return (
+              <pre className="my-3 p-4 rounded-xl bg-[#121215] border border-[#27272a] overflow-x-auto font-mono text-xs text-[#e4e4e7]">
+                <code {...props}>{children}</code>
+              </pre>
+            );
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    );
   }
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <div className="px-6 py-3 border-b border-[#3f3f46] flex items-center gap-3 bg-[#1c1c1f]">
-        <span className="text-xs font-mono text-[#71717a]">Context:</span>
+    <div className="flex flex-col h-full bg-[#09090b]">
+      {/* Context Toolbar */}
+      <div className="px-6 py-3.5 border-b border-[#27272a] flex items-center gap-3 bg-[#121215]">
+        <span className="text-[10px] font-mono text-indigo-400 uppercase tracking-widest">// CONTEXT SOURCE:</span>
         <select
           value={selectedDoc}
           onChange={e => setSelectedDoc(e.target.value)}
-          className="flex-1 max-w-xs bg-[#27272a] border border-[#3f3f46] rounded-lg px-3 py-1.5 text-xs font-mono text-[#c7d2fe] focus:outline-none focus:border-indigo-500 cursor-pointer"
+          className="flex-1 max-w-sm bg-[#1a1a1e] border border-[#27272a] rounded-xl px-3 py-1.5 text-xs font-mono text-indigo-300 focus:outline-none focus:border-indigo-500 cursor-pointer"
         >
-          <option value="">All documents</option>
+          <option value="">All indexed documents (Global RAG)</option>
           {docs.map(d => <option key={d.id} value={d.id}>{d.title}</option>)}
         </select>
-        <div className="flex items-center gap-1.5 ml-auto">
-          <span className="w-2 h-2 rounded-full bg-green-400" />
-          <span className="text-xs font-mono text-[#71717a]">RAG active</span>
+        <div className="flex items-center gap-2 ml-auto bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="text-[10px] font-mono text-emerald-400 uppercase tracking-wider font-semibold">RAG ACTIVE</span>
         </div>
       </div>
 
-      {/* Messages */}
+      {/* Messages Canvas */}
       <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
         {messages.length === 0 && (
           <div className="text-center py-20">
-            <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mx-auto mb-4 text-indigo-400">
+            <div className="w-16 h-16 rounded-2xl bg-indigo-600/10 border border-indigo-500/30 flex items-center justify-center mx-auto mb-4 text-indigo-400 shadow-[0_0_20px_rgba(99,102,241,0.2)]">
               {Icon.sparkle}
             </div>
-            <h3 className="font-mono font-semibold text-[#f4f4f5] mb-1">Ask your AI teacher</h3>
-            <p className="text-sm text-[#71717a] max-w-sm mx-auto">Questions are grounded in your uploaded course material via semantic search.</p>
+            <h3 className="font-mono font-bold text-[#f4f4f5] text-base mb-1">AI Study Assistant</h3>
+            <p className="text-xs font-mono text-[#71717a] max-w-sm mx-auto">Ask any question grounded in your course materials. Supports Voice Chat & instant citations.</p>
           </div>
         )}
         {messages.map(msg => (
-          <div key={msg.id} className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
-            <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-xs font-mono font-bold ${msg.role === "user" ? "bg-indigo-500 text-white" : "bg-[#3f3f46] text-[#818cf8]"}`}>
+          <div key={msg.id} className={`flex gap-3.5 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}>
+            <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-xs font-mono font-bold border shadow-sm ${
+              msg.role === "user" ? "bg-indigo-600 text-white border-indigo-400/40" : "bg-[#1a1a1e] text-indigo-400 border-[#27272a]"
+            }`}>
               {msg.role === "user" ? "U" : "AI"}
             </div>
-            <div className={`max-w-[72%] space-y-2 ${msg.role === "user" ? "items-end" : "items-start"} flex flex-col`}>
-              <div className={`px-4 py-3 rounded-xl text-sm leading-relaxed ${msg.role === "user" ? "bg-indigo-500 text-white rounded-tr-sm" : "bg-[#27272a] text-[#d4d4d8] rounded-tl-sm"}`}>
+            <div className={`max-w-[75%] space-y-2.5 ${msg.role === "user" ? "items-end" : "items-start"} flex flex-col`}>
+              <div className={`px-5 py-3.5 rounded-2xl text-sm leading-relaxed ${
+                msg.role === "user" 
+                  ? "bg-indigo-600 text-white rounded-tr-xs shadow-md" 
+                  : "bg-[#121215] border border-[#27272a] text-[#e4e4e7] rounded-tl-xs shadow-sm"
+              }`}>
                 {renderContent(msg.content)}
               </div>
               {msg.citations && msg.citations.length > 0 && (
-                <div className="space-y-1 w-full">
+                <div className="space-y-1.5 w-full">
                   {msg.citations.map((c, ci) => (
-                    <div key={ci} className="rounded-lg overflow-hidden border border-[#3f3f46]">
+                    <div key={ci} className="rounded-xl overflow-hidden border border-[#27272a] bg-[#121215]">
                       <button
                         onClick={() => toggleCitation(`${msg.id}-${ci}`)}
-                        className="w-full flex items-center gap-2 px-3 py-2 bg-[#27272a] hover:bg-[#3f3f46] transition-colors duration-150 text-left"
+                        className="w-full flex items-center gap-2 px-3.5 py-2 bg-[#1a1a1e] hover:bg-[#222228] transition-colors duration-150 text-left"
                       >
                         <span className="text-indigo-400">{Icon.sparkle}</span>
-                        <span className="text-xs font-mono text-[#818cf8]">Source {ci + 1}</span>
-                        <span className={`ml-auto text-[#52525b] transition-transform duration-200 ${expandedCitations.has(`${msg.id}-${ci}`) ? "rotate-180" : ""}`}>{Icon.chevronDown}</span>
+                        <span className="text-xs font-mono text-indigo-300 font-medium">Source Citation #{ci + 1}</span>
+                        <span className={`ml-auto text-[#71717a] transition-transform duration-200 ${expandedCitations.has(`${msg.id}-${ci}`) ? "rotate-180" : ""}`}>{Icon.chevronDown}</span>
                       </button>
                       {expandedCitations.has(`${msg.id}-${ci}`) && (
-                        <div className="px-3 py-2 bg-[#1c1c1f] border-t border-[#3f3f46]">
-                          <p className="text-xs font-mono text-[#71717a] italic">"{c.snippet}"</p>
+                        <div className="px-3.5 py-2.5 bg-[#0e0e11] border-t border-[#27272a]">
+                          <p className="text-xs font-mono text-[#a1a1aa] italic leading-relaxed">"{c.snippet}"</p>
                         </div>
                       )}
                     </div>
                   ))}
                 </div>
               )}
-              <span className="text-[10px] font-mono text-[#52525b]">{msg.timestamp}</span>
+              <span className="text-[10px] font-mono text-[#71717a] px-1">{msg.timestamp}</span>
             </div>
           </div>
         ))}
         {typing && (
-          <div className="flex gap-3">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-[#3f3f46] text-[#818cf8] text-xs font-mono font-bold">AI</div>
-            <div className="px-4 py-3 rounded-xl bg-[#27272a] flex gap-1.5 items-center">
+          <div className="flex gap-3.5">
+            <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-[#1a1a1e] text-indigo-400 border border-[#27272a] text-xs font-mono font-bold">AI</div>
+            <div className="px-5 py-3.5 rounded-2xl bg-[#121215] border border-[#27272a] flex gap-1.5 items-center">
               {[0, 1, 2].map(i => (
-                <span key={i} className="w-1.5 h-1.5 rounded-full bg-[#6366f1] animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+                <span key={i} className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
               ))}
             </div>
           </div>
@@ -759,26 +1107,59 @@ function ChatView() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
-      <div className="px-6 py-4 border-t border-[#3f3f46]">
-        <div className="flex gap-3 items-end">
-          <textarea
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-            placeholder="Ask a question about your notes..."
-            rows={1}
-            className="flex-1 bg-[#27272a] border border-[#3f3f46] rounded-xl px-4 py-3 text-sm text-[#f4f4f5] placeholder:text-[#52525b] focus:outline-none focus:border-indigo-500 resize-none font-sans transition-colors duration-150"
-          />
+      {/* Input Area */}
+      <div className="px-6 py-4 border-t border-[#27272a] bg-[#121215]">
+        <div className="flex gap-3 items-center">
           <button
-            onClick={sendMessage}
-            disabled={!input.trim()}
-            className="w-10 h-10 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center text-white transition-colors duration-150 shrink-0"
+            onClick={() => setIsVoiceMode(!isVoiceMode)}
+            className={`w-11 h-11 rounded-xl flex items-center justify-center transition-all duration-150 shrink-0 border ${
+              isVoiceMode 
+                ? 'bg-indigo-600 text-white border-indigo-400 shadow-[0_0_15px_rgba(99,102,241,0.4)]' 
+                : 'bg-[#1a1a1e] text-[#a1a1aa] border-[#27272a] hover:text-[#f4f4f5] hover:border-[#3f3f46]'
+            }`}
+            title="Toggle Voice Mode"
           >
-            {Icon.send}
+            🎙️
           </button>
+          
+          {isVoiceMode ? (
+            <div className="flex-1 flex items-center justify-center bg-[#1a1a1e] border border-[#27272a] rounded-xl px-4 h-11">
+              <button
+                onMouseDown={startRecording}
+                onMouseUp={stopRecording}
+                onMouseLeave={stopRecording}
+                onTouchStart={startRecording}
+                onTouchEnd={stopRecording}
+                className={`px-6 py-1.5 rounded-lg flex items-center justify-center gap-2 font-mono text-xs font-semibold transition-all duration-200 select-none ${
+                  isRecording 
+                    ? 'bg-rose-600 text-white shadow-[0_0_15px_rgba(244,63,94,0.5)] animate-pulse' 
+                    : 'bg-indigo-600 text-white hover:bg-indigo-500'
+                }`}
+              >
+                {isRecording ? "Listening... (Release to Send)" : "Hold Space / Click to Speak"}
+              </button>
+            </div>
+          ) : (
+            <>
+              <textarea
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+                placeholder="Ask a question about your study documents..."
+                rows={1}
+                className="flex-1 bg-[#1a1a1e] border border-[#27272a] rounded-xl px-4 py-3 text-sm text-[#f4f4f5] placeholder:text-[#52525b] focus:outline-none focus:border-indigo-500 resize-none font-sans transition-all duration-150"
+              />
+              <button
+                onClick={sendMessage}
+                disabled={!input.trim()}
+                className="w-11 h-11 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center text-white transition-all duration-150 shrink-0 shadow-sm"
+              >
+                {Icon.send}
+              </button>
+            </>
+          )}
         </div>
-        <p className="mt-2 text-[10px] font-mono text-[#52525b]">Shift+Enter for newline · Answers grounded in your uploaded documents</p>
+        <p className="mt-2 text-[10px] font-mono text-[#71717a]">Press Enter to send • Answers grounded in vector database embeddings</p>
       </div>
     </div>
   );
@@ -794,9 +1175,21 @@ function QuizView() {
   const [quizResults, setQuizResults] = useState<{ score: number; results: { questionId: string; isCorrect: boolean; explanation: string }[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [docs, setDocs] = useState<ApiDocument[]>([]);
+  const [selectedDocId, setSelectedDocId] = useState("");
+  const [questionCount, setQuestionCount] = useState(4);
+  const [generating, setGenerating] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(0);
 
   useEffect(() => {
-    fetchQuizzes().then(setQuizzes).catch(e => setError(e.message)).finally(() => setLoading(false));
+    Promise.all([
+      fetchQuizzes().then(setQuizzes),
+      fetchDocuments().then(d => {
+        const ready = d.filter(x => statusForDoc(x) === "ready");
+        setDocs(ready);
+        if (ready.length > 0) setSelectedDocId(ready[0].id);
+      }),
+    ]).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
   function selectOption(qi: number, answer: string) {
@@ -812,6 +1205,7 @@ function QuizView() {
       setSelected({});
       setSubmitted(false);
       setQuizResults(null);
+      setTimeLeft((full.questions?.length || 0) * 60);
       setPhase("taking");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load quiz");
@@ -820,8 +1214,23 @@ function QuizView() {
     }
   }
 
+  async function handleGenerateQuiz() {
+    if (!selectedDocId) return;
+    setGenerating(true);
+    setError("");
+    try {
+      const quiz = await generateQuiz(selectedDocId, undefined, questionCount);
+      setQuizzes(prev => [quiz, ...prev]);
+      await startQuiz(quiz);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to generate quiz. Check your Groq API key in Settings.");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
   async function handleSubmit() {
-    if (!selectedQuiz?.questions) return;
+    if (!selectedQuiz?.questions || submitted) return;
     setSubmitted(true);
     try {
       const answers = selectedQuiz.questions.map((q, i) => ({
@@ -840,54 +1249,97 @@ function QuizView() {
   const questions = selectedQuiz?.questions || [];
   const count = questions.length;
 
+  // Timer hook
+  useEffect(() => {
+    if (phase === "taking" && !submitted && timeLeft > 0) {
+      const timer = setInterval(() => {
+        setTimeLeft(prev => prev > 0 ? prev - 1 : 0);
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [phase, submitted, timeLeft]);
+
+  // Auto-submit when time is up
+  useEffect(() => {
+    if (phase === "taking" && !submitted && timeLeft === 0 && selectedQuiz) {
+      handleSubmit();
+    }
+  }, [phase, submitted, timeLeft, selectedQuiz]);
+
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
   if (loading && phase === "list") {
-    return <div className="p-6 text-sm font-mono text-[#52525b]">Loading quizzes...</div>;
+    return <div className="p-8 text-sm font-mono text-[#71717a]">Loading quizzes...</div>;
   }
 
   // Phase: List quizzes
   if (phase === "list") {
     return (
-      <div className="p-6 space-y-6">
+      <div className="p-8 space-y-6 bg-[#09090b]">
         {error && (
-          <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm font-mono text-red-400">{error}</div>
+          <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm font-mono text-rose-400">⚠️ {error}</div>
         )}
 
         {/* Generate Quiz card */}
-        <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-6">
-          <h2 className="font-mono font-bold text-xl text-[#f4f4f5] mb-1">Generate Quiz</h2>
-          <p className="text-sm text-[#71717a] mb-6">AI generates multiple-choice questions grounded in your uploaded notes.</p>
-          <div className="space-y-5 max-w-lg">
+        <div className="bg-[#121215] rounded-2xl border border-[#27272a] p-6 shadow-sm">
+          <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-0.5">// 01. QUIZ GENERATION ENGINE</span>
+          <h2 className="font-mono font-bold text-xl text-[#f4f4f5] mb-1">Generate Practice Quiz</h2>
+          <p className="text-xs font-mono text-[#71717a] mb-6">AI creates multiple-choice questions grounded in your vector-indexed documents.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
             <div>
-              <label className="block text-xs font-mono text-[#a1a1aa] uppercase tracking-wider mb-2">Topic</label>
-              <div className="grid grid-cols-2 gap-2">
-                {["Data Structures", "Algorithms", "Operating Systems", "Networks"].map(t => (
-                  <button key={t} className="px-4 py-3 rounded-xl text-sm font-mono text-left border border-[#3f3f46] bg-[#27272a] text-[#71717a] hover:border-[#6366f1]/50 hover:text-[#f4f4f5] transition-all duration-150">
-                    {t}
-                  </button>
-                ))}
-              </div>
+              <label className="block text-xs font-mono text-[#71717a] uppercase tracking-wider mb-2">Source Document</label>
+              {docs.length === 0 ? (
+                <p className="text-xs font-mono text-[#71717a]">No documents ready. Upload a PDF first.</p>
+              ) : (
+                <select
+                  value={selectedDocId}
+                  onChange={e => setSelectedDocId(e.target.value)}
+                  className="w-full bg-[#1a1a1e] border border-[#27272a] rounded-xl px-3.5 py-2.5 text-xs font-mono text-indigo-300 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                >
+                  {docs.map(d => (
+                    <option key={d.id} value={d.id}>{d.title}</option>
+                  ))}
+                </select>
+              )}
             </div>
             <div>
-              <label className="block text-xs font-mono text-[#a1a1aa] uppercase tracking-wider mb-3">Question Count — <span className="text-indigo-400">4</span></label>
-              <input type="range" min={2} max={10} defaultValue={4} className="w-full accent-indigo-500 cursor-pointer" />
-              <div className="flex justify-between text-xs font-mono text-[#52525b] mt-1"><span>2</span><span>10</span></div>
+              <label className="block text-xs font-mono text-[#71717a] uppercase tracking-wider mb-3">Questions — <span className="text-indigo-400 font-bold">{questionCount}</span></label>
+              <input
+                type="range"
+                min={2}
+                max={10}
+                value={questionCount}
+                onChange={e => setQuestionCount(+e.target.value)}
+                className="w-full accent-indigo-500 cursor-pointer"
+              />
+              <div className="flex justify-between text-[10px] font-mono text-[#71717a] mt-1"><span>2 Qs</span><span>10 Qs</span></div>
             </div>
-            <div className="pt-2 border-t border-[#3f3f46] space-y-2">
-              <div className="flex justify-between text-xs font-mono"><span className="text-[#52525b]">Source document</span><span className="text-[#c7d2fe]">lecture_week5_binary_trees.pdf</span></div>
-              <div className="flex justify-between text-xs font-mono"><span className="text-[#52525b]">Estimated time</span><span className="text-[#71717a]">~180s</span></div>
+            <div className="flex items-end">
+              <button
+                onClick={handleGenerateQuiz}
+                disabled={!selectedDocId || generating}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-mono font-semibold text-xs flex items-center justify-center gap-2 transition-all duration-150 shadow-sm"
+              >
+                {generating ? (
+                  <><span className="animate-spin">⏳</span> Generating Quiz...</>
+                ) : (
+                  <>{Icon.sparkle} Generate {questionCount} Questions</>
+                )}
+              </button>
             </div>
-            <button className="w-full py-3 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-mono font-semibold text-sm flex items-center justify-center gap-2 transition-colors duration-150">
-              {Icon.sparkle} Generate 4 Questions
-            </button>
           </div>
         </div>
 
         {/* Existing quizzes */}
         <div>
-          <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider mb-3">Your Quizzes</h3>
+          <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-2">// SAVED QUIZZES</span>
           {quizzes.length === 0 ? (
-            <div className="bg-[#27272a] rounded-2xl border border-[#3f3f46] p-10 text-center">
-              <p className="text-sm text-[#71717a]">No quizzes yet. Generate one above to get started.</p>
+            <div className="bg-[#121215] rounded-2xl border border-[#27272a] p-10 text-center">
+              <p className="text-xs font-mono text-[#71717a]">No quizzes generated yet. Choose a document above to generate one.</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -895,10 +1347,15 @@ function QuizView() {
                 <button
                   key={q.id}
                   onClick={() => startQuiz(q)}
-                  className="text-left p-4 rounded-xl border border-[#3f3f46] bg-[#27272a] hover:border-indigo-500/40 hover:bg-indigo-500/5 transition-all duration-150"
+                  className="text-left p-4 rounded-xl border border-[#27272a] bg-[#121215] hover:border-indigo-500/40 hover:bg-[#1a1a24] transition-all duration-150 group"
                 >
-                  <p className="font-mono text-sm text-[#f4f4f5] font-semibold">{q.title}</p>
-                  <p className="text-xs font-mono text-[#52525b] mt-1">{q.questions?.length ?? "?"} questions · {dateStr(q.created_at)}</p>
+                  <div className="flex items-center justify-between">
+                    <p className="font-mono text-sm text-[#f4f4f5] font-semibold group-hover:text-indigo-300 transition-colors">{q.title}</p>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                      {q.questions?.length ?? "?"} Qs
+                    </span>
+                  </div>
+                  <p className="text-[10px] font-mono text-[#71717a] mt-2">Created {dateStr(q.created_at)}</p>
                 </button>
               ))}
             </div>
@@ -914,65 +1371,100 @@ function QuizView() {
     const allAnswered = Object.keys(selected).length === count;
 
     return (
-      <div className="p-6 w-full max-w-2xl">
-        <div className="flex items-center justify-between mb-6">
+      <div className="p-8 w-full max-w-4xl mx-auto space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between bg-[#121215] border border-[#27272a] p-4 rounded-2xl">
           <div className="flex items-center gap-3">
-            <span className="font-mono text-xs text-[#71717a]">{selectedQuiz?.title}</span>
-            <span className="text-[#3f3f46]">/</span>
-            <span className="font-mono text-xs text-[#a1a1aa]">{currentQ + 1} of {count}</span>
+            <span className="font-mono text-xs text-indigo-400 font-semibold">{selectedQuiz?.title}</span>
+            <span className="text-[#27272a]">•</span>
+            <span className="font-mono text-xs text-[#71717a]">Question {currentQ + 1} of {count}</span>
           </div>
-          <button onClick={() => { setPhase("list"); setSelectedQuiz(null); }} className="text-xs font-mono text-[#52525b] hover:text-[#f4f4f5] transition-colors">Exit</button>
+          <div className="flex items-center gap-4">
+            <div className={`text-xs font-mono font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${timeLeft < 30 ? "bg-rose-500/10 border-rose-500/30 text-rose-400 animate-pulse" : "bg-indigo-500/10 border-indigo-500/20 text-indigo-400"}`}>
+              <span>⏱</span>
+              <span>{formatTime(timeLeft)}</span>
+            </div>
+            <button onClick={() => { setPhase("list"); setSelectedQuiz(null); }} className="text-xs font-mono text-[#71717a] hover:text-[#f4f4f5] transition-colors">Exit</button>
+          </div>
         </div>
 
-        <div className="h-1 bg-[#27272a] rounded-full mb-8 overflow-hidden">
+        {/* Progress bar */}
+        <div className="h-2 bg-[#121215] rounded-full overflow-hidden border border-[#27272a]">
           <div className="h-full bg-indigo-500 rounded-full transition-all duration-500" style={{ width: `${((currentQ + 1) / count) * 100}%` }} />
         </div>
 
-        <div className="space-y-6">
-          <h3 className="font-mono font-semibold text-base text-[#f4f4f5] leading-relaxed">{q.question}</h3>
-          <div className="space-y-3">
+        {/* Question breadcrumb chips */}
+        <div className="flex gap-2 flex-wrap">
+          {questions.map((_, qi) => (
+            <button
+              key={qi}
+              onClick={() => setCurrentQ(qi)}
+              className={`w-8 h-8 rounded-xl text-xs font-mono font-bold transition-all duration-150 ${
+                qi === currentQ
+                  ? "bg-indigo-600 text-white shadow-sm"
+                  : selected[qi] !== undefined
+                  ? "bg-indigo-500/20 text-indigo-300 border border-indigo-500/30"
+                  : "bg-[#121215] text-[#71717a] border border-[#27272a] hover:border-[#3f3f46]"
+              }`}
+            >
+              {qi + 1}
+            </button>
+          ))}
+        </div>
+
+        {/* Question Card */}
+        <div className="bg-[#121215] border border-[#27272a] p-8 rounded-2xl shadow-sm space-y-6">
+          <h3 className="font-mono font-semibold text-lg text-[#f4f4f5] leading-relaxed">{q.question}</h3>
+
+          {/* Options */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5">
             {q.options.map((opt, oi) => {
               const isSelected = selected[currentQ] === opt;
               return (
                 <button
                   key={oi}
                   onClick={() => selectOption(currentQ, opt)}
-                  className={`w-full text-left px-4 py-3.5 rounded-xl border text-sm font-mono transition-all duration-150 flex items-center gap-3
-                    ${isSelected ? "border-indigo-500 bg-indigo-500/15 text-indigo-200" : "border-[#3f3f46] bg-[#27272a] text-[#a1a1aa] hover:border-[#6366f1]/50 hover:text-[#f4f4f5]"}`}
+                  className={`w-full text-left p-4 rounded-xl border text-xs font-mono transition-all duration-150 flex items-center gap-3.5
+                    ${isSelected
+                      ? "border-indigo-500 bg-indigo-500/15 text-indigo-200 shadow-sm"
+                      : "border-[#27272a] bg-[#1a1a1e] text-[#a1a1aa] hover:border-indigo-500/40 hover:text-[#f4f4f5]"}`}
                 >
-                  <span className={`w-6 h-6 rounded-lg text-xs flex items-center justify-center font-bold shrink-0 ${isSelected ? "bg-indigo-500 text-white" : "bg-[#3f3f46] text-[#52525b]"}`}>
+                  <span className={`w-7 h-7 rounded-lg text-xs flex items-center justify-center font-bold shrink-0 ${
+                    isSelected ? "bg-indigo-600 text-white" : "bg-[#27272a] text-[#71717a]"
+                  }`}>
                     {String.fromCharCode(65 + oi)}
                   </span>
-                  {opt}
+                  <span className="flex-1 leading-snug">{opt}</span>
                 </button>
               );
             })}
           </div>
+        </div>
 
-          <div className="flex gap-3 pt-2">
-            {currentQ > 0 && (
-              <button onClick={() => setCurrentQ(q => q - 1)} className="px-5 py-2.5 rounded-xl border border-[#3f3f46] text-sm font-mono text-[#71717a] hover:text-[#f4f4f5] hover:border-[#52525b] transition-colors duration-150">
-                Back
-              </button>
-            )}
-            {currentQ < count - 1 ? (
-              <button
-                onClick={() => setCurrentQ(q => q + 1)}
-                disabled={selected[currentQ] === undefined}
-                className="flex-1 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-mono font-semibold transition-colors duration-150"
-              >
-                Next
-              </button>
-            ) : (
-              <button
-                onClick={handleSubmit}
-                disabled={!allAnswered || submitted}
-                className="flex-1 py-2.5 rounded-xl bg-green-500 hover:bg-green-400 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-mono font-semibold transition-colors duration-150"
-              >
-                {submitted ? "Submitting..." : "Submit Quiz"}
-              </button>
-            )}
-          </div>
+        {/* Navigation */}
+        <div className="flex gap-3">
+          {currentQ > 0 && (
+            <button onClick={() => setCurrentQ(q => q - 1)} className="px-6 py-2.5 rounded-xl border border-[#27272a] bg-[#121215] text-xs font-mono text-[#a1a1aa] hover:text-[#f4f4f5] hover:border-[#3f3f46] transition-colors">
+              Back
+            </button>
+          )}
+          {currentQ < count - 1 ? (
+            <button
+              onClick={() => setCurrentQ(q => q + 1)}
+              disabled={selected[currentQ] === undefined}
+              className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-mono font-semibold transition-colors"
+            >
+              Next Question →
+            </button>
+          ) : (
+            <button
+              onClick={handleSubmit}
+              disabled={!allAnswered || submitted}
+              className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-mono font-semibold transition-colors"
+            >
+              {submitted ? "Submitting..." : "Submit Practice Quiz"}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -983,59 +1475,63 @@ function QuizView() {
     const score = quizResults.score;
     const pct = Math.round(score);
     return (
-      <div className="p-6 w-full max-w-2xl space-y-8">
+      <div className="p-8 w-full max-w-4xl mx-auto space-y-8 bg-[#09090b]">
         <div className="flex items-start justify-between">
           <div>
-            <h2 className="font-mono font-bold text-xl text-[#f4f4f5]">Quiz Complete</h2>
-            <p className="text-sm text-[#71717a] mt-1">{selectedQuiz?.title}</p>
+            <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-0.5">// EVALUATION COMPLETE</span>
+            <h2 className="font-mono font-bold text-xl text-[#f4f4f5]">Quiz Performance Summary</h2>
+            <p className="text-xs font-mono text-[#71717a] mt-1">{selectedQuiz?.title}</p>
           </div>
-          <button onClick={() => { setPhase("list"); setSelectedQuiz(null); }} className="px-4 py-2 rounded-xl border border-[#3f3f46] text-xs font-mono text-[#71717a] hover:text-[#f4f4f5] hover:border-[#52525b] transition-colors">
-            Back to Quizzes
+          <button onClick={() => { setPhase("list"); setSelectedQuiz(null); }} className="px-4 py-2 rounded-xl border border-[#27272a] bg-[#121215] text-xs font-mono text-[#a1a1aa] hover:text-[#f4f4f5] transition-colors">
+            Back to Quizzes →
           </button>
         </div>
 
-        <div className="bg-[#27272a] rounded-2xl p-6 border border-[#3f3f46] flex items-center gap-8">
-          <div className="text-center">
-            <div className="font-mono font-bold text-5xl" style={{ color: pct >= 80 ? "#22c55e" : pct >= 60 ? "#6366f1" : "#f59e0b" }}>{pct}%</div>
-            <div className="text-xs font-mono text-[#52525b] mt-1">Score</div>
+        <div className="bg-[#121215] rounded-2xl p-6 border border-[#27272a] flex items-center gap-8 shadow-sm">
+          <div className="text-center shrink-0">
+            <div className="font-mono font-extrabold text-5xl" style={{ color: pct >= 80 ? "#10b981" : pct >= 60 ? "#6366f1" : "#f59e0b" }}>{pct}%</div>
+            <div className="text-[10px] font-mono text-[#71717a] uppercase tracking-wider mt-1">Accuracy Score</div>
           </div>
           <div className="flex-1">
-            <div className="h-2 bg-[#3f3f46] rounded-full overflow-hidden">
-              <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, backgroundColor: pct >= 80 ? "#22c55e" : pct >= 60 ? "#6366f1" : "#f59e0b" }} />
+            <div className="h-2 bg-[#1a1a1e] rounded-full overflow-hidden mb-3 border border-[#27272a]">
+              <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, backgroundColor: pct >= 80 ? "#10b981" : pct >= 60 ? "#6366f1" : "#f59e0b" }} />
             </div>
-            <p className="text-xs font-mono text-[#71717a] mt-2">{pct >= 80 ? "Excellent — keep it up!" : pct >= 60 ? "Good progress — review weak areas." : "Needs more practice."}</p>
+            <p className="text-xs font-mono text-[#f4f4f5] font-semibold">{pct >= 80 ? "Mastery Demonstrated — Excellent performance." : pct >= 60 ? "Solid Progress — Review highlighted gaps." : "Further Practice Recommended."}</p>
+            <p className="text-xs font-mono text-[#71717a] mt-1">{questions.filter((_, i) => quizResults.results[i]?.isCorrect).length} of {count} questions answered correctly</p>
           </div>
         </div>
 
-        <div className="space-y-3">
-          <h3 className="font-mono text-xs text-[#52525b] uppercase tracking-wider">Review</h3>
-          {questions.map((q, i) => {
-            const result = quizResults.results.find(r => r.questionId === q.id);
-            const correct = result?.isCorrect ?? false;
-            return (
-              <div key={q.id} className={`rounded-xl border p-4 space-y-3 ${correct ? "border-green-500/20 bg-green-500/5" : "border-red-500/20 bg-red-500/5"}`}>
-                <div className="flex items-start gap-3">
-                  <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${correct ? "bg-green-500" : "bg-red-500"}`}>
-                    {correct ? Icon.check : Icon.x}
-                  </div>
-                  <p className="text-sm font-mono text-[#d4d4d8] leading-relaxed">{q.question}</p>
-                </div>
-                <div className="pl-8 space-y-1">
-                  {!correct && selected[i] && (
-                    <div className="flex gap-2 text-xs font-mono text-red-400">
-                      <span className="shrink-0">Your answer:</span>
-                      <span>{selected[i]}</span>
+        <div>
+          <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-3">// QUESTION BREAKDOWN</span>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {questions.map((q, i) => {
+              const result = quizResults.results.find(r => r.questionId === q.id);
+              const correct = result?.isCorrect ?? false;
+              return (
+                <div key={q.id} className={`rounded-2xl border p-5 space-y-3 bg-[#121215] ${correct ? "border-emerald-500/30" : "border-rose-500/30"}`}>
+                  <div className="flex items-start gap-3">
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-xs text-white ${correct ? "bg-emerald-500" : "bg-rose-500"}`}>
+                      {correct ? "✓" : "✕"}
                     </div>
-                  )}
-                  <div className="flex gap-2 text-xs font-mono text-green-400">
-                    <span className="shrink-0">Correct:</span>
-                    <span>{q.correct_answer}</span>
+                    <p className="text-xs font-mono text-[#f4f4f5] font-medium leading-relaxed">{q.question}</p>
                   </div>
-                  {q.explanation && <p className="text-xs text-[#71717a] mt-2 leading-relaxed">{q.explanation}</p>}
+                  <div className="pl-8 space-y-1 text-xs font-mono">
+                    {!correct && selected[i] && (
+                      <div className="text-rose-400">
+                        <span>Your selection: </span>
+                        <span className="font-semibold">{selected[i]}</span>
+                      </div>
+                    )}
+                    <div className="text-emerald-400">
+                      <span>Correct answer: </span>
+                      <span className="font-semibold">{q.correct_answer}</span>
+                    </div>
+                    {q.explanation && <p className="text-[11px] text-[#71717a] mt-2 leading-relaxed italic">{q.explanation}</p>}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </div>
     );
@@ -1057,7 +1553,7 @@ function ProgressView() {
   }, []);
 
   if (loading) {
-    return <div className="p-8 text-sm font-mono text-[#52525b]">Loading progress...</div>;
+    return <div className="p-8 text-sm font-mono text-[#71717a]">Loading progress tracker...</div>;
   }
 
   const displayProgress = progress.length > 0 ? progress : [
@@ -1073,27 +1569,28 @@ function ProgressView() {
   }));
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-8 space-y-8 bg-[#09090b]">
       {/* Mastery rings */}
       <div>
-        <h2 className="font-mono text-xs text-[#52525b] uppercase tracking-wider mb-5">Topic Mastery</h2>
+        <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-1">// 01. PROFICIENCY METRICS</span>
+        <h2 className="font-mono text-sm font-semibold text-[#f4f4f5] mb-5">Topic Mastery Ratings</h2>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           {displayProgress.map(p => {
             const trends = ["up", "up", "flat", "down"];
             const trend = trends[displayProgress.indexOf(p) % trends.length];
-            const attempts = [7, 5, 2, 4];
-            const attemptCount = attempts[displayProgress.indexOf(p) % attempts.length];
+            const attemptsArr = [7, 5, 2, 4];
+            const attemptCount = attemptsArr[displayProgress.indexOf(p) % attemptsArr.length];
             return (
-              <div key={p.id} className="bg-[#27272a] rounded-2xl p-5 border border-[#3f3f46] flex flex-col items-center gap-3">
+              <div key={p.id} className="bg-[#121215] rounded-2xl p-5 border border-[#27272a] flex flex-col items-center gap-3 shadow-sm">
                 <MasteryRing mastery={Math.round(p.mastery_score)} topic={p.topics?.name ?? "Unknown"} />
                 <div className="text-center space-y-1">
                   <div className="flex items-center gap-1.5 justify-center">
-                    <span className={`${trend === "up" ? "text-green-400" : trend === "down" ? "text-red-400" : "text-[#52525b]"}`}>
-                      {trend === "up" ? "↑" : trend === "down" ? "↓" : "–"}
+                    <span className={`text-xs font-mono font-bold ${trend === "up" ? "text-emerald-400" : trend === "down" ? "text-rose-400" : "text-[#71717a]"}`}>
+                      {trend === "up" ? "↑ +4%" : trend === "down" ? "↓ -2%" : "–"}
                     </span>
-                    <span className="text-xs font-mono text-[#52525b]">{attemptCount} quizzes</span>
+                    <span className="text-[10px] font-mono text-[#71717a]">• {attemptCount} quizzes</span>
                   </div>
-                  <div className="text-xs font-mono text-[#3f3f46]">{dateStr(p.last_updated)}</div>
+                  <div className="text-[10px] font-mono text-[#71717a]">{dateStr(p.last_updated)}</div>
                 </div>
               </div>
             );
@@ -1104,15 +1601,16 @@ function ProgressView() {
       {/* Weak areas */}
       {displayProgress.filter(p => p.mastery_score < 60).length > 0 && (
         <div>
-          <h2 className="font-mono text-xs text-[#52525b] uppercase tracking-wider mb-3">Needs Attention</h2>
+          <span className="font-mono text-[10px] text-amber-400 uppercase tracking-widest block mb-1">// 02. TARGETED REVISION</span>
+          <h2 className="font-mono text-sm font-semibold text-[#f4f4f5] mb-3">Topics Requiring Attention</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {displayProgress.filter(p => p.mastery_score < 60).map(p => (
-              <div key={p.id} className="bg-[#27272a] rounded-xl border border-yellow-500/20 p-4 flex items-center gap-4">
-                <div className="w-10 h-10 rounded-xl bg-yellow-500/10 flex items-center justify-center text-yellow-500 font-mono font-bold text-sm shrink-0">{Math.round(p.mastery_score)}</div>
+              <div key={p.id} className="bg-[#121215] rounded-xl border border-amber-500/30 p-4 flex items-center gap-4">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 font-mono font-bold text-sm shrink-0">{Math.round(p.mastery_score)}</div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-mono text-sm text-[#f4f4f5] truncate">{p.topics?.name ?? "Unknown"}</p>
-                  <div className="mt-1.5 h-1.5 bg-[#3f3f46] rounded-full overflow-hidden">
-                    <div className="h-full bg-yellow-500 rounded-full" style={{ width: `${p.mastery_score}%` }} />
+                  <p className="font-mono text-xs text-[#f4f4f5] font-semibold truncate">{p.topics?.name ?? "Unknown"}</p>
+                  <div className="mt-2 h-1.5 bg-[#1a1a1e] rounded-full overflow-hidden border border-[#27272a]">
+                    <div className="h-full bg-amber-500 rounded-full" style={{ width: `${p.mastery_score}%` }} />
                   </div>
                 </div>
               </div>
@@ -1123,13 +1621,14 @@ function ProgressView() {
 
       {/* Recent attempts table */}
       <div>
-        <h2 className="font-mono text-xs text-[#52525b] uppercase tracking-wider mb-3">Recent Attempts</h2>
-        <div className="rounded-xl overflow-hidden border border-[#3f3f46]">
+        <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-1">// 03. ATTEMPT LOG</span>
+        <h2 className="font-mono text-sm font-semibold text-[#f4f4f5] mb-3">Quiz Session History</h2>
+        <div className="rounded-2xl overflow-hidden border border-[#27272a] bg-[#121215]">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-[#3f3f46] bg-[#27272a]">
-                {["Date", "Topic", "Score", "Time", "Trend"].map(h => (
-                  <th key={h} className="px-4 py-3 text-left font-mono text-xs text-[#52525b] uppercase tracking-wider">{h}</th>
+              <tr className="border-b border-[#27272a] bg-[#1a1a1e]/40">
+                {["Date", "Topic", "Score", "Time", "Accuracy"].map(h => (
+                  <th key={h} className="px-5 py-3 text-left font-mono text-[10px] text-[#71717a] uppercase tracking-widest">{h}</th>
                 ))}
               </tr>
             </thead>
@@ -1138,21 +1637,20 @@ function ProgressView() {
                 const pct = Math.round(a.score);
                 const times = ["4m 32s", "6m 18s", "5m 01s", "8m 44s", "3m 55s"];
                 return (
-                  <tr key={a.id} className={`border-b border-[#27272a] hover:bg-[#27272a] transition-colors duration-150 ${i === displayAttempts.length - 1 ? "border-b-0" : ""}`}>
-                    <td className="px-4 py-3 font-mono text-xs text-[#52525b]">{dateStr(a.created_at)}</td>
-                    <td className="px-4 py-3">
-                      <span className="px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-mono">{a.quizzes?.topics?.name ?? a.quizzes?.title ?? "Quiz"}</span>
+                  <tr key={a.id} className={`border-b border-[#27272a]/60 hover:bg-[#1a1a24]/50 transition-colors duration-150 ${i === displayAttempts.length - 1 ? "border-b-0" : ""}`}>
+                    <td className="px-5 py-3.5 font-mono text-xs text-[#71717a]">{dateStr(a.created_at)}</td>
+                    <td className="px-5 py-3.5">
+                      <span className="px-2.5 py-1 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-mono">{a.quizzes?.topics?.name ?? a.quizzes?.title ?? "Quiz"}</span>
                     </td>
-                    <td className="px-4 py-3">
-                      <span className={`font-mono font-semibold text-sm ${pct >= 80 ? "text-green-400" : pct >= 60 ? "text-indigo-400" : "text-yellow-400"}`}>
-                        {Math.round(a.score * 10) / 10}/10
+                    <td className="px-5 py-3.5">
+                      <span className={`font-mono font-bold text-xs ${pct >= 80 ? "text-emerald-400" : pct >= 60 ? "text-indigo-400" : "text-amber-400"}`}>
+                        {Math.round(a.score * 10) / 10}/100
                       </span>
-                      <span className="text-xs font-mono text-[#52525b] ml-1">({pct}%)</span>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-[#71717a]">{times[i % times.length]}</td>
-                    <td className="px-4 py-3">
-                      <div className="w-16 h-1.5 bg-[#3f3f46] rounded-full overflow-hidden">
-                        <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: pct >= 80 ? "#22c55e" : pct >= 60 ? "#6366f1" : "#f59e0b" }} />
+                    <td className="px-5 py-3.5 font-mono text-xs text-[#71717a]">{times[i % times.length]}</td>
+                    <td className="px-5 py-3.5">
+                      <div className="w-20 h-1.5 bg-[#1a1a1e] rounded-full overflow-hidden border border-[#27272a]">
+                        <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: pct >= 80 ? "#10b981" : pct >= 60 ? "#6366f1" : "#f59e0b" }} />
                       </div>
                     </td>
                   </tr>
@@ -1166,14 +1664,20 @@ function ProgressView() {
   );
 }
 
-function SettingsView() {
+function SettingsView({ onClearData }: { onClearData?: () => void }) {
   const [settings, setSettings] = useState<ApiSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [apiKey, setApiKey] = useState("");
-  const [model, setModel] = useState("");
-  const [embeddingsModel, setEmbeddingsModel] = useState("");
+  const [clearing, setClearing] = useState(false);
+  const [clearMsg, setClearMsg] = useState("");
+  const [groqApiKey, setGroqApiKey] = useState("");
+  const [groqKeySet, setGroqKeySet] = useState(false);
+  const [groqKeyMasked, setGroqKeyMasked] = useState("");
+  const [groqModel, setGroqModel] = useState("");
+  const [googleApiKey, setGoogleApiKey] = useState("");
+  const [googleKeySet, setGoogleKeySet] = useState(false);
+  const [googleKeyMasked, setGoogleKeyMasked] = useState("");
   const [chunkSize, setChunkSize] = useState(700);
   const [chunkOverlap, setChunkOverlap] = useState(15);
 
@@ -1181,11 +1685,13 @@ function SettingsView() {
     fetchSettings()
       .then(s => {
         setSettings(s);
-        setApiKey(s.apiKey);
-        setModel(s.model);
-        setEmbeddingsModel(s.embeddingsModel);
-        setChunkSize(s.chunkSize);
-        setChunkOverlap(s.chunkOverlap);
+        setGroqKeySet(s.groqKeySet);
+        setGroqKeyMasked(s.groqKeyMasked);
+        setGroqModel(s.groqModel || "");
+        setGoogleKeySet(s.googleKeySet);
+        setGoogleKeyMasked(s.googleKeyMasked);
+        setChunkSize(s.chunkSize || 700);
+        setChunkOverlap(s.chunkOverlap || 15);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -1195,7 +1701,21 @@ function SettingsView() {
     setSaving(true);
     setSaved(false);
     try {
-      await updateSettings({ apiKey, model, embeddingsModel, chunkSize, chunkOverlap });
+      const payload: Record<string, unknown> = { chunkSize, chunkOverlap };
+      if (groqModel) payload.groqModel = groqModel;
+      if (groqApiKey) payload.groqApiKey = groqApiKey;
+      if (googleApiKey) payload.googleApiKey = googleApiKey;
+      await updateSettings(payload as Partial<ApiSettings>);
+      if (groqApiKey) {
+        setGroqKeySet(true);
+        setGroqKeyMasked(groqApiKey.slice(0, 4) + "••••••••" + groqApiKey.slice(-4));
+        setGroqApiKey("");
+      }
+      if (googleApiKey) {
+        setGoogleKeySet(true);
+        setGoogleKeyMasked(googleApiKey.slice(0, 4) + "••••••••" + googleApiKey.slice(-4));
+        setGoogleApiKey("");
+      }
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch {
@@ -1204,94 +1724,324 @@ function SettingsView() {
     }
   }
 
+  async function handleClearData() {
+    if (!confirm("Delete ALL documents, chunks, quizzes, progress, and flashcards? This cannot be undone.")) return;
+    setClearing(true);
+    setClearMsg("");
+    try {
+      await clearDemoData();
+      setClearMsg("All data cleared.");
+      onClearData?.();
+      setTimeout(() => setClearMsg(""), 3000);
+    } catch (e: unknown) {
+      setClearMsg(e instanceof Error ? e.message : "Clear failed");
+    } finally {
+      setClearing(false);
+    }
+  }
+
   if (loading) {
-    return <div className="p-6 text-sm font-mono text-[#52525b]">Loading settings...</div>;
+    return <div className="p-8 text-sm font-mono text-[#71717a]">Loading environment configuration...</div>;
   }
 
   return (
-    <div className="p-6 w-full space-y-8">
-      <div className="flex items-center justify-between">
+    <div className="p-8 w-full max-w-4xl mx-auto space-y-8 bg-[#09090b]">
+      <div className="flex items-center justify-between bg-[#121215] border border-[#27272a] p-6 rounded-2xl shadow-sm">
         <div>
-          <h2 className="font-mono font-bold text-xl text-[#f4f4f5] mb-1">Settings</h2>
-          <p className="text-sm text-[#71717a]">Configure your VidyaAI environment.</p>
+          <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-0.5">// ENVIRONMENT CONFIG</span>
+          <h2 className="font-mono font-bold text-xl text-[#f4f4f5]">VidyaAI Settings</h2>
         </div>
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-60 text-white text-xs font-mono font-semibold transition-colors duration-150"
+          className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-xs font-mono font-semibold transition-all shadow-sm"
         >
-          {saving ? "Saving..." : saved ? "Saved!" : "Save Settings"}
+          {saving ? "Saving..." : saved ? "✓ Saved" : "Save Changes"}
         </button>
       </div>
 
-      {/* API Key */}
-      <div className="py-3 border-b border-[#27272a]">
-        <label className="block font-mono text-sm text-[#d4d4d8] mb-1">API Key</label>
-        <p className="font-mono text-xs text-[#52525b] mb-2">OpenAI API key for embeddings and chat</p>
-        <input
-          type="password"
-          value={apiKey}
-          onChange={e => setApiKey(e.target.value)}
-          placeholder="sk-..."
-          className="w-full max-w-md bg-[#1c1c1f] border border-[#3f3f46] rounded-lg px-3 py-2 text-sm font-mono text-[#f4f4f5] placeholder:text-[#52525b] focus:outline-none focus:border-indigo-500 transition-colors duration-150"
-        />
-        <p className="text-[10px] font-mono text-[#3f3f46] mt-1">Stored locally in settings.json — never committed</p>
+      {/* Google (Embeddings) */}
+      <div className="p-6 bg-[#121215] border border-[#27272a] rounded-2xl space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className={`w-2.5 h-2.5 rounded-full ${googleKeySet ? "bg-emerald-400" : "bg-rose-400"}`} />
+            <label className="font-mono text-xs font-bold text-[#f4f4f5]">Google AI Studio (Embeddings)</label>
+          </div>
+          <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${googleKeySet ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" : "bg-rose-500/10 text-rose-400 border border-rose-500/20"}`}>
+            {googleKeySet ? "● Configured" : "● Missing"}
+          </span>
+        </div>
+        <p className="font-mono text-xs text-[#71717a]">Powers semantic search embeddings — text-embedding-004 (768 dimensions)</p>
+        {googleKeySet ? (
+          <div className="w-full max-w-md flex items-center gap-2">
+            <input
+              type="text"
+              value={googleKeyMasked}
+              disabled
+              className="flex-1 bg-[#1a1a1e] border border-[#27272a] rounded-xl px-3.5 py-2 text-xs font-mono text-[#71717a] cursor-not-allowed"
+            />
+            <button
+              onClick={() => { setGoogleKeySet(false); setGoogleKeyMasked(""); setGoogleApiKey(""); }}
+              className="px-3 py-2 rounded-xl border border-[#27272a] bg-[#1a1a1e] text-xs font-mono text-[#71717a] hover:text-rose-400 hover:border-rose-500/30 transition-colors"
+            >
+              Change
+            </button>
+          </div>
+        ) : (
+          <input
+            type="password"
+            value={googleApiKey}
+            onChange={e => setGoogleApiKey(e.target.value)}
+            placeholder="AIza..."
+            className="w-full max-w-md bg-[#1a1a1e] border border-[#27272a] rounded-xl px-3.5 py-2 text-xs font-mono text-[#f4f4f5] placeholder:text-[#52525b] focus:outline-none focus:border-indigo-500 transition-colors"
+          />
+        )}
       </div>
 
-      {/* Model settings */}
-      {[
-        { label: "AI Model", value: model, onChange: setModel, note: "Chat endpoint", placeholder: "gpt-4o-mini" },
-        { label: "Embeddings Model", value: embeddingsModel, onChange: setEmbeddingsModel, note: "Vector search", placeholder: "text-embedding-3-small" },
-      ].map(row => (
-        <div key={row.label} className="py-3 border-b border-[#27272a]">
-          <label className="block font-mono text-sm text-[#d4d4d8] mb-1">{row.label}</label>
-          <p className="font-mono text-xs text-[#52525b] mb-2">{row.note}</p>
-          <input
-            type="text"
-            value={row.value}
-            onChange={e => row.onChange(e.target.value)}
-            placeholder={row.placeholder}
-            className="w-full max-w-md bg-[#1c1c1f] border border-[#3f3f46] rounded-lg px-3 py-2 text-sm font-mono text-[#f4f4f5] placeholder:text-[#52525b] focus:outline-none focus:border-indigo-500 transition-colors duration-150"
-          />
-        </div>
-      ))}
-
-      {/* Chunk settings */}
-      {[
-        { label: "Chunk Size", value: chunkSize, onChange: setChunkSize, note: "Tokens per chunk", min: 200, max: 2000 },
-        { label: "Chunk Overlap", value: chunkOverlap, onChange: setChunkOverlap, note: "Overlap percentage", min: 0, max: 50 },
-      ].map(row => (
-        <div key={row.label} className="py-3 border-b border-[#27272a]">
-          <label className="block font-mono text-sm text-[#d4d4d8] mb-1">{row.label}</label>
-          <p className="font-mono text-xs text-[#52525b] mb-2">{row.note}</p>
-          <div className="flex items-center gap-3 max-w-md">
-            <input
-              type="range"
-              min={row.min}
-              max={row.max}
-              value={row.value}
-              onChange={e => row.onChange(+e.target.value)}
-              className="flex-1 accent-indigo-500 cursor-pointer"
-            />
-            <span className="font-mono text-sm text-[#a1a1aa] w-12 text-right">{row.value}{row.label.includes("Over") ? "%" : ""}</span>
+      {/* Groq (LLM) */}
+      <div className="p-6 bg-[#121215] border border-[#27272a] rounded-2xl space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className={`w-2.5 h-2.5 rounded-full ${groqKeySet ? "bg-emerald-400" : "bg-rose-400"}`} />
+            <label className="font-mono text-xs font-bold text-[#f4f4f5]">Groq Cloud (LLM Engine)</label>
           </div>
+          <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${groqKeySet ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" : "bg-rose-500/10 text-rose-400 border border-rose-500/20"}`}>
+            {groqKeySet ? "● Configured" : "● Missing"}
+          </span>
         </div>
-      ))}
+        <p className="font-mono text-xs text-[#71717a]">Powers AI Teacher chat, quiz generation, and SRS flashcard creation</p>
+        {groqKeySet ? (
+          <div className="w-full max-w-md flex items-center gap-2">
+            <input
+              type="text"
+              value={groqKeyMasked}
+              disabled
+              className="flex-1 bg-[#1a1a1e] border border-[#27272a] rounded-xl px-3.5 py-2 text-xs font-mono text-[#71717a] cursor-not-allowed"
+            />
+            <button
+              onClick={() => { setGroqKeySet(false); setGroqKeyMasked(""); setGroqApiKey(""); }}
+              className="px-3 py-2 rounded-xl border border-[#27272a] bg-[#1a1a1e] text-xs font-mono text-[#71717a] hover:text-rose-400 hover:border-rose-500/30 transition-colors"
+            >
+              Change
+            </button>
+          </div>
+        ) : (
+          <input
+            type="password"
+            value={groqApiKey}
+            onChange={e => setGroqApiKey(e.target.value)}
+            placeholder="gsk_..."
+            className="w-full max-w-md bg-[#1a1a1e] border border-[#27272a] rounded-xl px-3.5 py-2 text-xs font-mono text-[#f4f4f5] placeholder:text-[#52525b] focus:outline-none focus:border-indigo-500 transition-colors"
+          />
+        )}
+      </div>
 
-      {/* Connection status */}
-      <div className="py-3">
-        <label className="block font-mono text-sm text-[#d4d4d8] mb-1">Vector Store</label>
-        <p className="font-mono text-xs text-[#52525b] mb-2">Supabase pgvector connection</p>
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${settings?.supabaseConnected ? "bg-green-400" : "bg-red-400"}`} />
-          <span className="font-mono text-xs text-[#a1a1aa]">{settings?.supabaseConnected ? "Connected" : "Not connected"}</span>
+      {/* Danger Zone */}
+      <div className="p-6 bg-[#121215] border border-rose-500/20 rounded-2xl flex items-center justify-between gap-4">
+        <div>
+          <span className="font-mono text-[10px] text-rose-400 uppercase tracking-widest block mb-0.5">// DANGER ZONE</span>
+          <p className="font-mono text-xs text-[#f4f4f5] font-semibold">Clear Application Database</p>
+          <p className="font-mono text-[11px] text-[#71717a] mt-0.5">Purges all documents, vector chunks, quiz logs, and flashcard SRS data.</p>
+          {clearMsg && <p className="font-mono text-xs mt-1 text-rose-400">{clearMsg}</p>}
         </div>
+        <button
+          onClick={handleClearData}
+          disabled={clearing}
+          className="px-4 py-2.5 rounded-xl border border-rose-500/40 bg-rose-500/10 text-xs font-mono text-rose-400 hover:bg-rose-500/20 transition-all shrink-0"
+        >
+          {clearing ? "Clearing..." : "Clear All Data"}
+        </button>
       </div>
     </div>
   );
 }
 
-// ─── Shell ────────────────────────────────────────────────────────────────────
+function FlashcardsView({ navigate }: { navigate: (v: View) => void }) {
+  const [cards, setCards] = useState<ApiFlashcard[]>([]);
+  const [topics, setTopics] = useState<ApiTopic[]>([]);
+  const [documents, setDocuments] = useState<ApiDocument[]>([]);
+  const [loading, setLoading] = useState(true);
+  
+  const [topicFilter, setTopicFilter] = useState<string>("all");
+  const [docFilter, setDocFilter] = useState<string>("all");
+
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [isFlipped, setIsFlipped] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    Promise.all([
+      fetchDueFlashcards(),
+      fetchTopics(),
+      fetchDocuments()
+    ]).then(([f, t, d]) => {
+      setCards(f);
+      setTopics(t);
+      setDocuments(d);
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    setCurrentIndex(0);
+    setIsFlipped(false);
+  }, [topicFilter, docFilter]);
+
+  const filteredCards = cards.filter(c => {
+    const matchTopic = topicFilter === "all" || c.topic_id === topicFilter;
+    const matchDoc = docFilter === "all" || c.document_id === docFilter;
+    return matchTopic && matchDoc;
+  });
+
+  const handleReview = async (quality: number) => {
+    if (submitting || currentIndex >= filteredCards.length) return;
+    setSubmitting(true);
+    const card = filteredCards[currentIndex];
+    try {
+      await reviewFlashcard(card.id, quality);
+      setIsFlipped(false);
+      setCurrentIndex(c => c + 1);
+    } catch (e) {
+      console.error(e);
+      alert("Failed to submit review");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (loading) return <div className="p-8 text-sm font-mono text-[#71717a]">Loading SRS flashcards...</div>;
+
+  const progress = currentIndex >= filteredCards.length 
+    ? `${filteredCards.length} / ${filteredCards.length}` 
+    : `${currentIndex + 1} / ${filteredCards.length}`;
+
+  return (
+    <div className="p-8 max-w-2xl mx-auto h-full flex flex-col pt-6 bg-[#09090b]">
+      <div className="flex items-center justify-between mb-6 bg-[#121215] border border-[#27272a] p-4 rounded-2xl">
+        <div>
+          <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest block mb-0.5">// SRS REVIEW ENGINE</span>
+          <h2 className="font-mono font-bold text-sm text-[#f4f4f5]">Flashcard Spaced Repetition</h2>
+        </div>
+        <span className="px-3 py-1 bg-indigo-500/10 border border-indigo-500/30 rounded-full text-xs font-mono text-indigo-300 font-bold">{progress}</span>
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-3 mb-6">
+        <select
+          value={topicFilter}
+          onChange={(e) => setTopicFilter(e.target.value)}
+          className="flex-1 bg-[#121215] border border-[#27272a] rounded-xl px-4 py-2.5 text-xs text-[#f4f4f5] font-mono focus:outline-none focus:border-indigo-500"
+        >
+          <option value="all">All Topics</option>
+          {topics.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+        <select
+          value={docFilter}
+          onChange={(e) => setDocFilter(e.target.value)}
+          className="flex-1 bg-[#121215] border border-[#27272a] rounded-xl px-4 py-2.5 text-xs text-[#f4f4f5] font-mono focus:outline-none focus:border-indigo-500"
+        >
+          <option value="all">All Documents</option>
+          {documents.map(d => <option key={d.id} value={d.id}>{d.title}</option>)}
+        </select>
+      </div>
+
+      {currentIndex >= filteredCards.length ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#121215] border border-[#27272a] rounded-2xl my-4">
+          <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mb-4">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+          </div>
+          <h2 className="font-mono font-bold text-xl text-[#f4f4f5] mb-2">Review Session Complete</h2>
+          <p className="text-xs font-mono text-[#71717a] max-w-sm mb-6">You've completed all due cards for your selected filters.</p>
+          
+          <div className="flex gap-3">
+            <button onClick={() => { setTopicFilter("all"); setDocFilter("all"); }} className="px-4 py-2.5 rounded-xl border border-[#27272a] bg-[#1a1a1e] text-[#a1a1aa] hover:text-[#f4f4f5] text-xs font-mono transition-colors">
+              Reset Filters
+            </button>
+            <button onClick={() => navigate("documents")} className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-mono font-semibold transition-colors">
+              Go to Documents →
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 flex flex-col relative" style={{ perspective: "1500px" }}>
+          <div 
+            onClick={() => !isFlipped && setIsFlipped(true)}
+            className={`w-full h-80 relative transition-transform duration-500 cursor-pointer`}
+            style={{ 
+              transformStyle: "preserve-3d", 
+              transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)",
+              transitionTimingFunction: "cubic-bezier(0.645, 0.045, 0.355, 1)",
+              willChange: "transform"
+            }}
+          >
+            {/* Front Face */}
+            <div 
+              className="absolute inset-0 w-full h-full flex flex-col rounded-2xl border border-[#27272a] bg-[#121215] hover:border-indigo-500/40 transition-colors shadow-sm p-8 overflow-hidden"
+              style={{ backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden" }}
+            >
+              <div className="mb-4 flex">
+                <span className="px-2.5 py-1 bg-indigo-500/10 text-indigo-300 text-[10px] font-mono rounded-lg border border-indigo-500/20">{filteredCards[currentIndex].topic_name || "Untagged"}</span>
+              </div>
+              
+              <div className="flex-1 flex items-center justify-center text-center">
+                <h3 className="text-lg md:text-xl text-[#f4f4f5] leading-relaxed font-mono font-semibold">
+                  {filteredCards[currentIndex].question}
+                </h3>
+              </div>
+              
+              <div className="pt-4 flex justify-center border-t border-[#27272a]">
+                <span className="text-xs font-mono text-indigo-400 flex items-center gap-2">
+                  Click card to reveal answer →
+                </span>
+              </div>
+            </div>
+
+            {/* Back Face */}
+            <div 
+              className="absolute inset-0 w-full h-full flex flex-col rounded-2xl border border-indigo-500/40 bg-[#121215] shadow-lg p-8 overflow-y-auto"
+              style={{ backfaceVisibility: "hidden", WebkitBackfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
+            >
+              <div className="mb-4 flex">
+                <span className="px-2.5 py-1 bg-indigo-500/10 text-indigo-300 text-[10px] font-mono rounded-lg border border-indigo-500/20">{filteredCards[currentIndex].topic_name || "Untagged"}</span>
+              </div>
+              
+              <div className="flex-1 flex flex-col items-center justify-center text-center">
+                <p className="text-xs font-mono text-[#71717a] mb-2">{filteredCards[currentIndex].question}</p>
+                <div className="text-sm font-mono text-[#f4f4f5] leading-relaxed">
+                  {filteredCards[currentIndex].answer}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Rating buttons */}
+          <div className={`mt-6 transition-all duration-300 ${isFlipped ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'}`}>
+            <p className="text-center text-[10px] font-mono text-[#71717a] uppercase tracking-wider mb-3">Rate Recall Difficulty</p>
+            <div className="grid grid-cols-5 gap-2">
+              {[
+                { score: 1, label: "Again", color: "hover:bg-rose-500/20 hover:text-rose-300 hover:border-rose-500/40" },
+                { score: 2, label: "Hard", color: "hover:bg-amber-500/20 hover:text-amber-300 hover:border-amber-500/40" },
+                { score: 3, label: "Good", color: "hover:bg-indigo-500/20 hover:text-indigo-300 hover:border-indigo-500/40" },
+                { score: 4, label: "Easy", color: "hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/40" },
+                { score: 5, label: "Perfect", color: "hover:bg-cyan-500/20 hover:text-cyan-300 hover:border-cyan-500/40" }
+              ].map(b => (
+                <button
+                  key={b.score}
+                  disabled={submitting}
+                  onClick={(e) => { e.stopPropagation(); handleReview(b.score); }}
+                  className={`flex flex-col items-center justify-center p-3 rounded-xl border border-[#3f3f46] bg-[#27272a] text-[#a1a1aa] transition-colors duration-150 ${b.color} disabled:opacity-50`}
+                >
+                  <span className="font-bold text-lg mb-1">{b.score}</span>
+                  <span className="text-[10px] font-mono uppercase tracking-wider">{b.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Shell Definitions ────────────────────────────────────────────────────────
 
 const NAV_ITEMS: { id: View; label: string; icon: React.ReactNode }[] = [
   { id: "dashboard", label: "Dashboard", icon: (
@@ -1302,6 +2052,11 @@ const NAV_ITEMS: { id: View; label: string; icon: React.ReactNode }[] = [
   { id: "documents", label: "My Documents", icon: Icon.folder },
   { id: "chat", label: "AI Teacher", icon: Icon.chat },
   { id: "quiz", label: "Practice Quizzes", icon: Icon.quiz },
+  { id: "flashcards", label: "Flashcards", icon: (
+    <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+    </svg>
+  )},
   { id: "progress", label: "Progress Tracker", icon: Icon.chart },
   { id: "settings", label: "Settings", icon: Icon.settings },
 ];
@@ -1311,6 +2066,7 @@ const VIEW_TITLES: Record<View, string> = {
   documents: "My Documents",
   chat: "AI Teacher",
   quiz: "Practice Quizzes",
+  flashcards: "Flashcards",
   progress: "Progress Tracker",
   settings: "Settings",
 };
@@ -1318,30 +2074,56 @@ const VIEW_TITLES: Record<View, string> = {
 export default function App() {
   const [view, setView] = useState<View>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [quickPrompt, setQuickPrompt] = useState("");
+  const [uploadTrigger, setUploadTrigger] = useState(0);
+  const [demoSeeding, setDemoSeeding] = useState(false);
+  const [demoMsg, setDemoMsg] = useState("");
+
+  async function handleLoadDemo() {
+    if (demoSeeding) return;
+    setDemoSeeding(true);
+    setDemoMsg("");
+    try {
+      const result = await seedDemoData();
+      const s = result.stats;
+      setDemoMsg(`✓ ${s.documentsCount} docs, ${s.chunksCount} chunks, ${s.quizzesCount} quizzes`);
+      setTimeout(() => setDemoMsg(""), 6000);
+      // Refresh current view
+      setView(v => v === "dashboard" ? "dashboard" : v);
+    } catch (e: unknown) {
+      setDemoMsg(e instanceof Error ? e.message : "Seed failed — check API keys in Settings");
+      setTimeout(() => setDemoMsg(""), 6000);
+    } finally {
+      setDemoSeeding(false);
+    }
+  }
 
   return (
-    <div className="w-full h-screen flex bg-[#18181b] text-[#f4f4f5] overflow-hidden" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
+    <div className="w-full h-screen flex bg-[#09090b] text-[#f4f4f5] overflow-hidden" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
       {/* Sidebar */}
       <aside
-        className={`flex flex-col border-r border-[#27272a] bg-[#1c1c1f] transition-all duration-300 shrink-0 ${sidebarOpen ? "w-56" : "w-14"}`}
+        className={`flex flex-col border-r border-[#27272a] bg-[#121215] transition-all duration-300 shrink-0 ${sidebarOpen ? "w-60" : "w-16"}`}
       >
         {/* Logo */}
         <div className="flex items-center gap-3 px-4 py-5 border-b border-[#27272a]">
-          <div className="w-7 h-7 rounded-lg bg-indigo-500 flex items-center justify-center shrink-0">
-            <svg width="14" height="14" fill="none" stroke="white" strokeWidth="2" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342M6.75 15a.75.75 0 100-1.5.75.75 0 000 1.5zm0 0v-3.675A55.378 55.378 0 0112 8.443m-7.007 11.55A5.981 5.981 0 006.75 15.75v-1.5" />
+          <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center shrink-0 relative shadow-[0_0_15px_rgba(99,102,241,0.4)]">
+            <svg width="16" height="16" viewBox="0 0 32 32" fill="none">
+              <path d="M16 6L8 11l8 5 8-5-8-5z" fill="#fff" opacity="0.9"/>
+              <path d="M8 16l8 5 8-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+              <path d="M8 20l8 5 8-5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity="0.5"/>
             </svg>
+            <div className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-[#121215] animate-pulse" />
           </div>
           {sidebarOpen && (
             <div className="overflow-hidden">
-              <span className="font-mono font-bold text-sm text-[#f4f4f5] whitespace-nowrap">VidyaAI</span>
-              <span className="block text-[10px] font-mono text-[#52525b] whitespace-nowrap">Study Teacher</span>
+              <span className="font-mono font-bold text-sm text-[#f4f4f5] tracking-tight whitespace-nowrap block">VidyaAI</span>
+              <span className="block text-[10px] font-mono text-indigo-400 uppercase tracking-widest whitespace-nowrap">Study Studio</span>
             </div>
           )}
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 px-2 py-3 space-y-0.5">
+        <nav className="flex-1 px-2.5 py-4 space-y-1">
           {NAV_ITEMS.map(item => {
             const active = view === item.id;
             return (
@@ -1349,22 +2131,59 @@ export default function App() {
                 key={item.id}
                 onClick={() => setView(item.id)}
                 title={!sidebarOpen ? item.label : undefined}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-150 text-left
-                  ${active ? "bg-indigo-500/20 text-indigo-300" : "text-[#71717a] hover:bg-[#27272a] hover:text-[#d4d4d8]"}
-                  ${!sidebarOpen ? "justify-center" : ""}`}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all duration-150 text-left relative group
+                  ${active 
+                    ? "bg-indigo-500/15 border-l-2 border-indigo-500 text-indigo-300 font-semibold shadow-[0_0_15px_rgba(99,102,241,0.15)]" 
+                    : "text-[#71717a] hover:bg-[#1a1a1e] hover:text-[#d4d4d8] border-l-2 border-transparent"}
+                  ${!sidebarOpen ? "justify-center px-0" : ""}`}
               >
-                <span className={`shrink-0 ${active ? "text-indigo-400" : ""}`}>{item.icon}</span>
-                {sidebarOpen && <span className="font-mono text-xs truncate">{item.label}</span>}
-                {active && sidebarOpen && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />}
+                <span className={`shrink-0 transition-colors ${active ? "text-indigo-400" : "group-hover:text-[#f4f4f5]"}`}>{item.icon}</span>
+                {sidebarOpen && <span className="font-mono text-xs truncate tracking-wide">{item.label}</span>}
+                {active && sidebarOpen && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(99,102,241,0.8)] shrink-0" />}
               </button>
             );
           })}
         </nav>
 
-        {/* Toggle */}
+        {/* LOAD DEMO button */}
+        <div className="mx-2.5 mb-2">
+          <button
+            onClick={handleLoadDemo}
+            disabled={demoSeeding}
+            title={sidebarOpen ? undefined : "Load Demo Data"}
+            className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs font-mono transition-all duration-150 ${
+              sidebarOpen ? "justify-start" : "justify-center"
+            } ${
+              demoSeeding
+                ? "bg-indigo-500/10 text-indigo-400 cursor-not-allowed border border-indigo-500/20"
+                : "bg-[#1a1a1e] border border-[#27272a] text-[#a1a1aa] hover:text-indigo-300 hover:border-indigo-500/30 hover:bg-[#1a1a24]"
+            }`}
+          >
+            {demoSeeding ? (
+              <>
+                <span className="w-3.5 h-3.5 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin shrink-0" />
+                {sidebarOpen && <span className="truncate">Seeding...</span>}
+              </>
+            ) : (
+              <>
+                <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" className="shrink-0 text-indigo-400">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                </svg>
+                {sidebarOpen && <span className="truncate">Load Demo</span>}
+              </>
+            )}
+          </button>
+          {sidebarOpen && demoMsg && (
+            <p className={`text-[10px] font-mono mt-1 px-1 leading-tight ${
+              demoMsg.startsWith("✓") ? "text-emerald-400" : "text-rose-400"
+            }`}>{demoMsg}</p>
+          )}
+        </div>
+
+        {/* Toggle Sidebar */}
         <button
           onClick={() => setSidebarOpen(o => !o)}
-          className="mx-2 mb-3 flex items-center justify-center py-2 rounded-lg text-[#52525b] hover:text-[#d4d4d8] hover:bg-[#27272a] transition-colors duration-150"
+          className="mx-2.5 mb-4 flex items-center justify-center py-2 rounded-xl text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#1a1a1e] border border-transparent hover:border-[#27272a] transition-all duration-150"
         >
           <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
             {sidebarOpen
@@ -1374,40 +2193,52 @@ export default function App() {
         </button>
       </aside>
 
-      {/* Main */}
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        {/* Top bar */}
-        <header className="flex items-center gap-4 px-6 py-3.5 border-b border-[#27272a] bg-[#1c1c1f] shrink-0 min-w-0">
-          <h1 className="font-mono font-semibold text-sm text-[#f4f4f5] truncate">{VIEW_TITLES[view]}</h1>
-          <div className="ml-auto flex items-center gap-2 shrink-0">
-            {[
-              { label: "Upload", icon: Icon.upload, onClick: () => setView("documents") },
-              { label: "New Chat", icon: Icon.chat, onClick: () => setView("chat") },
-              { label: "Generate Quiz", icon: Icon.quiz, onClick: () => setView("quiz") },
-            ].map(btn => (
-              <button
-                key={btn.label}
-                onClick={btn.onClick}
-                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#3f3f46] text-xs font-mono text-[#a1a1aa] hover:text-[#f4f4f5] hover:border-[#52525b] transition-colors duration-150"
-              >
-                {btn.icon}
-                {btn.label}
-              </button>
-            ))}
-            <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-300 font-mono font-bold text-xs ml-1">
+      {/* Main Container */}
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-[#09090b]">
+        {/* Topbar */}
+        <header className="flex items-center gap-4 px-6 py-4 border-b border-[#27272a] bg-[#121215] shrink-0 min-w-0 shadow-sm">
+          <div className="flex items-center gap-3 truncate">
+            <span className="font-mono text-[10px] text-indigo-400 uppercase tracking-widest px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20">MODULE</span>
+            <h1 className="font-mono font-semibold text-sm text-[#f4f4f5] truncate tracking-tight">{VIEW_TITLES[view]}</h1>
+          </div>
+
+          <div className="ml-auto flex items-center gap-2.5 shrink-0">
+            <button
+              onClick={() => { if (view === "documents") setUploadTrigger(c => c + 1); else { setView("documents"); setTimeout(() => setUploadTrigger(c => c + 1), 150); } }}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#27272a] bg-[#1a1a1e] text-xs font-mono text-[#d4d4d8] hover:text-white hover:border-indigo-500/40 hover:bg-[#1a1a24] transition-all duration-150 cursor-pointer shadow-sm"
+              title="Upload document"
+            >
+              {Icon.upload} Upload
+            </button>
+            <button
+              onClick={() => { setQuickPrompt(""); setView("chat"); }}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#27272a] bg-[#1a1a1e] text-xs font-mono text-[#d4d4d8] hover:text-white hover:border-indigo-500/40 hover:bg-[#1a1a24] transition-all duration-150 cursor-pointer shadow-sm"
+              title="Start new chat"
+            >
+              {Icon.chat} New Chat
+            </button>
+            <button
+              onClick={() => setView("quiz")}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-indigo-500/30 bg-indigo-600/10 text-xs font-mono text-indigo-300 hover:bg-indigo-600/20 hover:border-indigo-500/50 transition-all duration-150 cursor-pointer shadow-sm"
+              title="Generate quiz"
+            >
+              {Icon.quiz} Generate Quiz
+            </button>
+            <div className="w-8 h-8 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-300 font-mono font-bold text-xs ml-1 shadow-sm">
               S
             </div>
           </div>
         </header>
 
-        {/* View content */}
-        <main className="flex-1 overflow-y-auto">
-          {view === "dashboard" && <DashboardView navigate={setView} />}
-          {view === "documents" && <DocumentsView />}
-          {view === "chat" && <ChatView />}
+        {/* View Content Canvas */}
+        <main className="flex-1 overflow-y-auto bg-[#09090b]">
+          {view === "dashboard" && <DashboardView navigate={setView} quickPrompt={quickPrompt} setQuickPrompt={setQuickPrompt} />}
+          {view === "documents" && <DocumentsView uploadTrigger={uploadTrigger} />}
+          {view === "chat" && <ChatView key={view === "chat" ? "chat" : "idle"} quickPrompt={quickPrompt} clearQuickPrompt={() => setQuickPrompt("")} />}
           {view === "quiz" && <QuizView />}
+          {view === "flashcards" && <FlashcardsView navigate={setView} />}
           {view === "progress" && <ProgressView />}
-          {view === "settings" && <SettingsView />}
+          {view === "settings" && <SettingsView onClearData={() => setView("dashboard")} />}
         </main>
       </div>
     </div>
