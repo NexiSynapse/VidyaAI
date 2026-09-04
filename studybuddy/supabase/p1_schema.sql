@@ -1,4 +1,4 @@
--- StudyBuddy — Priority 1 schema (quiz + progress tables used by Person 3 endpoints)
+-- StudyBuddy — Priority 1 schema (quiz + progress tables)
 -- Run this after p0_schema.sql in the Supabase SQL editor.
 
 -- Quizzes generated from document chunks

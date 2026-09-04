@@ -61,15 +61,15 @@ Different stack (Python/FastAPI + Alpine.js, not Next.js), so less directly port
 
 | Role | Owns |
 |---|---|
-| **Frontend (Person 1)** | All UI: upload, chat, quiz, dashboard, flashcards. Consumes the API contract below. |
-| **Backend — Data & Ingestion (Person 2)** | DB schema, file upload/storage, PDF parsing, chunking, embeddings, vector retrieval, progress/mastery persistence. |
-| **Backend — AI & Orchestration (Person 3)** | Chat endpoint (RAG → prompt → LLM → citations), quiz generation, quiz scoring logic, flashcard generation, prompt design. |
+| **Frontend** | All UI: upload, chat, quiz, dashboard, flashcards. Consumes the API contract below. |
+| **Backend — Data & Ingestion** | DB schema, file upload/storage, PDF parsing, chunking, embeddings, vector retrieval, progress/mastery persistence. |
+| **Backend — AI & Orchestration** | Chat endpoint (RAG → prompt → LLM → citations), quiz generation, quiz scoring logic, flashcard generation, prompt design. |
 
-**Why split this way and not "backend A does auth, B does everything else":** Person 2's work (ingestion pipeline) and Person 3's work (using what's ingested) are sequential but each is a full, parallel-buildable subsystem — Person 3 can build against mock chunks while Person 2 finishes real ingestion, so nobody blocks anybody for long.
+**Why split this way and not "backend A does auth, B does everything else":** The ingestion pipeline and the AI orchestration are sequential but each is a full, parallel-buildable subsystem — AI can build against mock chunks while ingestion finishes real pipeline, so nobody blocks anybody for long.
 
 ### Coordination protocol
-1. **Hour 0–1:** All three agree on the API contract (§6) and DB schema (§7) together — do not skip this, it's what lets you all work in parallel.
-2. Person 2 stands up the Supabase project immediately so everyone has DB access by hour 1.
+1. **Hour 0–1:** All team members agree on the API contract (§6) and DB schema (§7) together — do not skip this, it's what lets you all work in parallel.
+2. The backend team stands up the Supabase project immediately so everyone has DB access by hour 1.
 3. Frontend builds against **mocked JSON responses** matching the contract until real endpoints land — don't wait.
 4. Merge/integrate at the end of every priority tier (P0, P1, P2), not just at the end.
 
@@ -88,7 +88,7 @@ Different stack (Python/FastAPI + Alpine.js, not Next.js), so less directly port
 │              NEXT.JS APP (single Vercel deploy)                │
 │  ┌────────────────┐  ┌───────────────┐  ┌──────────────────┐  │
 │  │ /api/documents  │  │  /api/chat    │  │   /api/quiz       │  │
-│  │  (Person 2)     │  │  (Person 3)   │  │   (Person 3)      │  │
+│  │  (Backend)      │  │  (Backend)    │  │   (Backend)       │  │
 │  └────────┬────────┘  └───────┬───────┘  └─────────┬─────────┘  │
 └───────────┼───────────────────┼────────────────────┼────────────┘
             │                   │                     │
@@ -163,14 +163,14 @@ Mastery calc for the hackathon: keep it simple — `mastery = weighted average o
 
 | Endpoint | Method | Body → Response | Owner |
 |---|---|---|---|
-| `/api/documents` | POST | `{file, topic}` → `{documentId, status}` | Person 2 |
-| `/api/documents` | GET | → `[{id, title, topic, status}]` | Person 2 |
-| `/api/chat` | POST | `{documentId or topic, message, history}` → `{answer, citations: [{snippet, page}]}` | Person 3 |
-| `/api/quiz/generate` | POST | `{documentId or topic, count}` → `{quizId, questions: [{id, question, options, }]}` | Person 3 |
-| `/api/quiz/submit` | POST | `{quizId, answers}` → `{score, results: [{correct, explanation}]}` | Person 3 |
-| `/api/progress` | GET | → `[{topic, mastery}]` | Person 2 (storage) / Person 3 (calc) |
-| `/api/flashcards/generate` (P2) | POST | `{documentId}` → `{cards: [{front, back}]}` | Person 3 |
-| `/api/flashcards/review` (P2) | POST | `{cardId, grade}` → `{nextReviewDate}` | Person 2 |
+| `/api/documents` | POST | `{file, topic}` → `{documentId, status}` | Backend — Data |
+| `/api/documents` | GET | → `[{id, title, topic, status}]` | Backend — Data |
+| `/api/chat` | POST | `{documentId or topic, message, history}` → `{answer, citations: [{snippet, page}]}` | Backend — AI |
+| `/api/quiz/generate` | POST | `{documentId or topic, count}` → `{quizId, questions: [{id, question, options, }]}` | Backend — AI |
+| `/api/quiz/submit` | POST | `{quizId, answers}` → `{score, results: [{correct, explanation}]}` | Backend — AI |
+| `/api/progress` | GET | → `[{topic, mastery}]` | Backend — Data (storage) / Backend — AI (calc) |
+| `/api/flashcards/generate` (P2) | POST | `{documentId}` → `{cards: [{front, back}]}` | Backend — AI |
+| `/api/flashcards/review` (P2) | POST | `{cardId, grade}` → `{nextReviewDate}` | Backend — Data |
 
 ---
 
@@ -182,8 +182,8 @@ Mastery calc for the hackathon: keep it simple — `mastery = weighted average o
 | Owner | Tasks |
 |---|---|
 | **Frontend** | Next.js + Tailwind + shadcn/ui skeleton and routing • Upload page (file input → calls upload API, shows doc list + status) • Chat page: pick a document, send messages, render answer + cited snippet • Basic nav/layout |
-| **Backend — Data (P2)** | Provision Supabase (Postgres, pgvector extension on, Storage bucket) • `documents` + `chunks` tables • `POST /api/documents`: store file, extract text, chunk, embed, insert rows • `GET /api/documents` • Retrieval helper: embed query → pgvector top-k cosine search |
-| **Backend — AI (P3)** | `POST /api/chat`: call retrieval helper → build grounded prompt → call LLM → return `{answer, citations}` • Handle "not found in your material" fallback when no relevant chunks • Basic in-memory or DB-stored chat history |
+| **Backend — Data** | Provision Supabase (Postgres, pgvector extension on, Storage bucket) • `documents` + `chunks` tables • `POST /api/documents`: store file, extract text, chunk, embed, insert rows • `GET /api/documents` • Retrieval helper: embed query → pgvector top-k cosine search |
+| **Backend — AI** | `POST /api/chat`: call retrieval helper → build grounded prompt → call LLM → return `{answer, citations}` • Handle "not found in your material" fallback when no relevant chunks • Basic in-memory or DB-stored chat history |
 
 **Definition of done:** Upload a PDF of lecture notes → ask "explain X" → get an answer that quotes/points to the actual notes.
 
@@ -195,8 +195,8 @@ Mastery calc for the hackathon: keep it simple — `mastery = weighted average o
 | Owner | Tasks |
 |---|---|
 | **Frontend** | Quiz UI: generate → answer → submit → show score & explanations • Progress dashboard: mastery bar/list per topic + recent attempts • Topic tagging/filtering on documents and chat • Streaming response UX, loading/error states |
-| **Backend — Data (P2)** | `topics` relation on documents • `quizzes`, `quiz_questions`, `quiz_attempts` tables • `progress` table + mastery calc function • Scope retrieval by topic filter |
-| **Backend — AI (P3)** | `POST /api/quiz/generate`: retrieve chunks → prompt LLM for structured JSON MCQs (use JSON/structured output mode, not free text) • `POST /api/quiz/submit`: score, store attempt, update mastery • `GET /api/progress` |
+| **Backend — Data** | `topics` relation on documents • `quizzes`, `quiz_questions`, `quiz_attempts` tables • `progress` table + mastery calc function • Scope retrieval by topic filter |
+| **Backend — AI** | `POST /api/quiz/generate`: retrieve chunks → prompt LLM for structured JSON MCQs (use JSON/structured output mode, not free text) • `POST /api/quiz/submit`: score, store attempt, update mastery • `GET /api/progress` |
 
 **Definition of done:** Generate a quiz from uploaded notes, take it, and watch your dashboard mastery score update.
 
@@ -208,8 +208,8 @@ Mastery calc for the hackathon: keep it simple — `mastery = weighted average o
 | Owner | Tasks |
 |---|---|
 | **Frontend** | Flashcard review UI (flip + again/good/easy) • Markdown + code-block syntax highlighting in chat • Magic-link auth screen (if adding real auth) • Landing page copy, dark mode, visual polish |
-| **Backend — Data (P2)** | `flashcards` table (SM-2 fields) • Due-cards query endpoint • Supabase auth wiring if added |
-| **Backend — AI (P3)** | `POST /api/flashcards/generate` • SM-2 spaced-repetition scheduling on review • Code-aware prompt path ("explain/debug this code" mode) • Better citations (section headers/page numbers, not raw chunk IDs) |
+| **Backend — Data** | `flashcards` table (SM-2 fields) • Due-cards query endpoint • Supabase auth wiring if added |
+| **Backend — AI** | `POST /api/flashcards/generate` • SM-2 spaced-repetition scheduling on review • Code-aware prompt path ("explain/debug this code" mode) • Better citations (section headers/page numbers, not raw chunk IDs) |
 
 **If you're short on time, cut in this order:** auth polish → flashcards → dark mode/landing polish → code-aware mode. Never cut P0/P1 to make room for P2.
 

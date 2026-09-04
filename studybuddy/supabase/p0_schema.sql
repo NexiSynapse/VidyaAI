@@ -1,5 +1,5 @@
--- StudyBuddy — Priority 0 schema (Person 2 owns ingestion; this migration provides the
--- pgvector contract that Person 3's retrieval layer (match_chunks RPC) depends on).
+-- StudyBuddy — Priority 0 schema (this migration provides the
+-- pgvector contract that the retrieval layer (match_chunks RPC) depends on).
 --
 -- Run this in the Supabase SQL editor (or via the Supabase CLI) on the project
 -- used by the app. Enable the pgvector extension first.
